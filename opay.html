@@ -2,7 +2,7 @@
 <html>
 
 <head>
-	<title>opay | Pay Now</title>
+	<title>Pay Now</title>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<link rel="stylesheet" href="css/main.css">
@@ -19,20 +19,33 @@
 					<input type="text" class="text-box" value="nkumar906099-5@oksbi" readonly><br>
 					<label style="color: #DAE1E2;">Enter Amount (INR):</label><br>
 					<input type="number" name="am" class="text-box" placeholder="Enter amount" required><br>
-					<button type="submit" class="btn">Pay Now</button>
+					<button type="submit" class="btn" id="payBtn">Pay Now</button>
 				</form>
+				<div id="payErr" style="color:#c62828; margin-top:8px; display:none;"></div>
 			</div>
 		</div>
 	</center>
 	<script>
 		async function payNow(event) {
 			event.preventDefault();
+			var btn = document.getElementById("payBtn");
+			var err = document.getElementById("payErr");
+			err.style.display = "none";
+			err.textContent = "";
+			btn.disabled = true;
+			btn.textContent = "Creating...";
+
 			var am = event.target.elements["am"].value;
 			if (!am || isNaN(am) || Number(am) <= 0) {
-				alert("Please enter a valid amount");
+				err.textContent = "Please enter a valid amount";
+				err.style.display = "block";
+				btn.disabled = false;
+				btn.textContent = "Pay Now";
 				return false;
 			}
+
 			var reference = "order_" + Date.now();
+			var created = false;
 			try {
 				var res = await fetch("/api/v1/transactions", {
 					method: "POST",
@@ -45,11 +58,23 @@
 						upiId: "nkumar906099-5@oksbi",
 					}),
 				});
+				if (!res.ok) {
+					var txt = await res.text();
+					throw new Error("Ledger create failed: " + res.status + " " + txt);
+				}
 				var data = await res.json();
 				console.log("created transaction", data);
+				created = true;
 			} catch (e) {
 				console.error("ledger create failed", e);
+				err.textContent = e.message || "Could not create payment. Try again.";
+				err.style.display = "block";
+				btn.disabled = false;
+				btn.textContent = "Pay Now";
+				return false;
 			}
+
+			btn.textContent = "Redirecting...";
 			location.href = "index.html?pa=nkumar906099-5@oksbi&am=" + encodeURIComponent(am)
 				+ "&cu=INR&reference=" + encodeURIComponent(reference);
 			return false;
