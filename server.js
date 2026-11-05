@@ -1,23 +1,28 @@
 var express = require("express");
 var app = express();
 var path = require("path");
+var crypto = require("crypto");
 var { Ledger } = require("./ledger");
 var { IdempotencyStore } = require("./idempotency");
 
-const port = process.argv[2] || 8080;
+const port = Number(process.env.PORT || process.argv[2] || 8080);
 
 // ---------- From-scratch ledger + idempotency (build-your-own) ----------
 var ledger = new Ledger();
 ledger.load();
 var idempotency = new IdempotencyStore();
 
-var MERCHANT = { id: "merchant_default", name: "Merchant", upiId: "nkumar906099-5@oksbi" };
+var MERCHANT = { id: "merchant_default", name: "Merchant", upiId: process.env.MERCHANT_UPI_ID || "nkumar906099-5@oksbi" };
 ledger.ensureMerchant(MERCHANT.id, MERCHANT.name, MERCHANT.upiId);
 
 // ---------- Simple session auth (admin / admin) ----------
-var sessions = {};
+var sessions = new Map();
+app.disable("x-powered-by");
+app.set("trust proxy", 1);
+app.use(function(req,res,next){ res.setHeader("X-Content-Type-Options","nosniff"); res.setHeader("Referrer-Policy","strict-origin-when-cross-origin"); res.setHeader("X-Frame-Options","DENY"); next(); });
+function validLogin(u,p) { const eu = process.env.OPAY_ADMIN_USER; const ep = process.env.OPAY_ADMIN_PASSWORD; if (!eu || !ep) return false; const safeEq = (a,b)=> { const aa=crypto.createHash("sha256").update(a).digest(); const bb=crypto.createHash("sha256").update(b).digest(); return crypto.timingSafeEqual(aa,bb); }; return safeEq(u,eu) && safeEq(p,ep); }
 function setSessionCookie(res, value) {
-  res.setHeader("Set-Cookie", "opay_session=" + value + "; Path=/; HttpOnly; SameSite=Lax");
+  res.setHeader("Set-Cookie", "opay_session=" + value + "; Path=/; HttpOnly; Secure; SameSite=Lax");
 }
 function clearSessionCookie(res) {
   res.setHeader("Set-Cookie", "opay_session=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT");
@@ -28,7 +33,7 @@ function getSession(req) {
   return m ? m[1] : null;
 }
 function isAuthed(req) {
-  return !!sessions[getSession(req)];
+  return sessions.has(getSession(req));
 }
 function requireAuth(req, res, next) {
   if (isAuthed(req)) return next();
@@ -53,74 +58,33 @@ app.get("/login", function (req, res) {
 app.post("/login", function (req, res) {
   var u = req.body.username || "";
   var p = req.body.password || "";
-  if (u === "admin" && p === "admin") {
-    var sid = "sess_" + Math.random().toString(36).slice(2);
-    sessions[sid] = true;
+  if (validLogin(u, p)) {
+    var sid = crypto.randomBytes(32).toString("hex");
+    sessions.set(sid, true);
     setSessionCookie(res, sid);
     return res.redirect("/ledger");
   }
   res.status(401).send(
     "<h2 style='color:#c62828'>Invalid login</h2>" +
-    "<p>Use <b>admin</b> / <b>admin</b></p>" +
     "<a href='/login' style='background:#2e7d32;color:#fff;padding:8px 14px;border-radius:4px;text-decoration:none;'>Try again</a>"
   );
 });
 
 app.get("/logout", function (req, res) {
   clearSessionCookie(res);
-  delete sessions[getSession(req)];
+  sessions.delete(getSession(req));
   res.redirect("/login");
 });
 
 // ---------- Public routes ----------
 app.get("/health", function (req, res) {
-  res.json({ status: "ok", db: "ok", cache: "ok" });
+  res.json({ status: "ok", mode: "unverified-demo", persistentStorage: false });
 });
 
 // UPI app callback (must stay public — called by UPI apps, no session)
 app.get("/callback", function (req, res) {
-  var rawStatus = (req.query.status || "pending").toString().toLowerCase();
-  var terminal = rawStatus === "success" ? "completed" : "failed";
-  var utr = req.query.utr || req.query.txnId || "";
-  var amount = req.query.amount || "";
-  var upiId = req.query.pa || "";
-  var refId = req.query.refId || "";
-  var reference = req.query.reference || "";
-
-  var txn = null;
-  if (reference) {
-    txn = ledger.getTransactionByReference(reference);
-  } else if (refId || utr) {
-    ledger.transactions.forEach(function (t) {
-      if (!txn && (t.refId === refId || t.utr === utr)) txn = t;
-    });
-  }
-
-  if (txn) {
-    var updates = { status: terminal, utr: utr, refId: refId, upiId: upiId };
-    if (amount && !isNaN(amount)) updates.amount = Number(amount);
-    ledger.updateTransaction(txn.id, updates);
-    var balance = ledger.getBalance(MERCHANT.id);
-    if (terminal === "completed") {
-      ledger.addLedgerEntry({ transactionId: txn.id, type: "credit", amount: txn.amount, balanceAfter: balance });
-    }
-  }
-
-  var base = "/success.html?status=" + encodeURIComponent(terminal)
-    + "&utr=" + encodeURIComponent(utr)
-    + "&amount=" + encodeURIComponent(amount)
-    + "&pa=" + encodeURIComponent(upiId)
-    + "&refId=" + encodeURIComponent(refId);
-  if (reference) base += "&reference=" + encodeURIComponent(reference);
-
-  if (terminal === "completed") {
-    res.redirect(base);
-  } else {
-    res.redirect("/failure.html?status=" + encodeURIComponent(terminal)
-      + "&utr=" + encodeURIComponent(utr)
-      + "&amount=" + encodeURIComponent(amount)
-      + "&pa=" + encodeURIComponent(upiId));
-  }
+  // A client-side UPI return is not bank confirmation. Never credit the ledger here.
+  res.redirect("/failure.html?status=unverified");
 });
 
 // ---------- Protected API ----------
@@ -194,7 +158,15 @@ app.get("/ledger", requireAuth, function (req, res) {
 });
 
 // ---------- Static frontend (public pages: opay.html, index.html, success, failure) ----------
-app.use(express.static(__dirname));
+app.get("/opay.html", requireAuth, function(req,res){ res.sendFile(path.join(__dirname,"opay.html")); });
+app.get("/ledger.html", requireAuth, function(req,res){ res.redirect("/ledger"); });
+app.use("/css",express.static(path.join(__dirname,"css"),{dotfiles:"deny"}));
+app.use("/img",express.static(path.join(__dirname,"img"),{dotfiles:"deny"}));
+app.use("/qrious",express.static(path.join(__dirname,"qrious"),{dotfiles:"deny"}));
+["/","/index.html","/success.html","/failure.html","/favicon.ico"].forEach(function(route){
+  var filename = route === "/" ? "index.html" : route.slice(1);
+  app.get(route,function(req,res){ res.sendFile(path.join(__dirname,filename)); });
+});
 
 var server = app.listen(port, function () {
   console.log("Server running at http://localhost:" + port);
