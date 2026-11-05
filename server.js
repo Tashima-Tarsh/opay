@@ -1,25 +1,43 @@
 var express = require("express");
 var app = express();
 var path = require("path");
+var crypto = require("crypto");
 var { Ledger } = require("./ledger");
 var { IdempotencyStore } = require("./idempotency");
 
-const port = process.env.PORT || process.argv[2] || 8080;
+const port = Number(process.env.PORT || process.argv[2] || 8080);
 
 // ---------- From-scratch ledger + idempotency (build-your-own) ----------
 var ledger = new Ledger();
 ledger.load();
 var idempotency = new IdempotencyStore();
 
-var ADMIN_USER = process.env.OPAY_ADMIN_USER || "admin";
-var ADMIN_PASS = process.env.OPAY_ADMIN_PASSWORD || "admin";
-var MERCHANT = { id: "merchant_default", name: "Merchant", upiId: "nkumar906099-5@oksbi" };
+var MERCHANT = { id: "merchant_default", name: "Merchant", upiId: process.env.MERCHANT_UPI_ID || "nkumar906099-5@oksbi" };
 ledger.ensureMerchant(MERCHANT.id, MERCHANT.name, MERCHANT.upiId);
 
 // ---------- Simple session auth (admin / admin) ----------
-var sessions = {};
+var ADMIN_USER = process.env.OPAY_ADMIN_USER;
+var ADMIN_PASS = process.env.OPAY_ADMIN_PASSWORD;
+var sessions = new Map();
+app.disable("x-powered-by");
+app.set("trust proxy", 1);
+app.use(function (req, res, next) {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("X-Frame-Options", "DENY");
+  next();
+});
+function validLogin(u, p) {
+  if (!ADMIN_USER || !ADMIN_PASS) return false;
+  var safeEq = function (a, b) {
+    var aa = crypto.createHash("sha256").update(a).digest();
+    var bb = crypto.createHash("sha256").update(b).digest();
+    return crypto.timingSafeEqual(aa, bb);
+  };
+  return safeEq(u, ADMIN_USER) && safeEq(p, ADMIN_PASS);
+}
 function setSessionCookie(res, value) {
-  res.setHeader("Set-Cookie", "opay_session=" + value + "; Path=/; HttpOnly; SameSite=Lax");
+  res.setHeader("Set-Cookie", "opay_session=" + value + "; Path=/; HttpOnly; Secure; SameSite=Lax");
 }
 function clearSessionCookie(res) {
   res.setHeader("Set-Cookie", "opay_session=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT");
@@ -30,11 +48,10 @@ function getSession(req) {
   return m ? m[1] : null;
 }
 function isAuthed(req) {
-  return !!sessions[getSession(req)];
+  return sessions.has(getSession(req));
 }
 function requireAuth(req, res, next) {
   if (isAuthed(req)) return next();
-  // HTML request -> redirect to login; API -> 401 JSON
   var accept = (req.headers.accept || "").toLowerCase();
   if (accept.includes("text/html") || req.url.startsWith("/login") || req.url.startsWith("/ledger") || req.url.startsWith("/logout")) {
     res.redirect("/login");
@@ -55,31 +72,32 @@ app.get("/login", function (req, res) {
 app.post("/login", function (req, res) {
   var u = req.body.username || "";
   var p = req.body.password || "";
-  if (u === ADMIN_USER && p === ADMIN_PASS) {
-    var sid = "sess_" + Math.random().toString(36).slice(2);
-    sessions[sid] = true;
+  if (validLogin(u, p)) {
+    var sid = crypto.randomBytes(32).toString("hex");
+    sessions.set(sid, true);
     setSessionCookie(res, sid);
     return res.redirect("/ledger");
   }
   res.status(401).send(
     "<h2 style='color:#c62828'>Invalid login</h2>" +
-    "<p>Use <b>admin</b> / <b>admin</b></p>" +
+    "<p>Use your configured admin credentials.</p>" +
     "<a href='/login' style='background:#2e7d32;color:#fff;padding:8px 14px;border-radius:4px;text-decoration:none;'>Try again</a>"
   );
 });
 
 app.get("/logout", function (req, res) {
   clearSessionCookie(res);
-  delete sessions[getSession(req)];
+  sessions.delete(getSession(req));
   res.redirect("/login");
 });
 
 // ---------- Public routes ----------
 app.get("/health", function (req, res) {
-  res.json({ status: "ok", db: "ok", cache: "ok" });
+  res.json({ status: "ok", mode: "unverified-demo", persistentStorage: false });
 });
 
 // UPI app callback (must stay public — called by UPI apps, no session)
+// Credits the ledger on UPI app return (no bank confirmation — matches your requirement)
 app.get("/callback", function (req, res) {
   var rawStatus = (req.query.status || "pending").toString().toLowerCase();
   var terminal = rawStatus === "success" ? "completed" : "failed";
