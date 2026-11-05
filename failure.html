@@ -16,22 +16,22 @@
 				<br>
 				<a href="opay.html" class="btn">Try Again</a>
 				<br><br>
-				<p style="color:#555;"><b>Developed BY : </b><a href="https://ptprashanttripathi.github.io" style="color:#999;">Pt. Prashant Tripathi</a></p>
+				<p style="color:#555;"><b>opay</b> &middot; UPI Payment Link Generator</p>
 			</div>
 		</div>
 	</center>
 	<script>
 		(function(){
-			const p = new URLSearchParams(window.location.search);
-			const status = p.get("status") || "failed";
-			const utr = p.get("utr") || "";
-			const amount = p.get("amount") || "";
-			const pa = p.get("pa") || "";
+			var p = new URLSearchParams(window.location.search);
+			var status = p.get("status") || "failed";
+			var utr = p.get("utr") || "";
+			var amount = p.get("amount") || "";
+			var pa = p.get("pa") || "";
 			var html = "Status: <b>" + status.toUpperCase() + "</b><br>";
 			if (amount) html += "Amount: \u20B9" + amount + "<br>";
 			if (pa) html += "UPI ID: " + pa + "<br>";
 			if (utr) html += "Transaction UTR: " + utr + "<br>";
-			html += "<br>The payment was not completed. Please try again.";
+			html += "<br>The payment was not completed and recorded as failed in the ledger. Try again.";
 			document.getElementById("details").innerHTML = html;
 		})();
 	</script>

@@ -31,11 +31,12 @@
 	<script src="qrious/qrious.min.js"></script>
 	<script>
 		(function () {
-			const qs = window.location.search;
-			const params = new URLSearchParams(qs);
-			const pa = params.get("pa") || "";
-			const am = params.get("am") || "";
-			const cu = params.get("cu") || "INR";
+			var qs = window.location.search;
+			var params = new URLSearchParams(qs);
+			var pa = params.get("pa") || "";
+			var am = params.get("am") || "";
+			var cu = params.get("cu") || "INR";
+			var reference = params.get("reference") || "";
 
 			if (!pa) {
 				location.replace("opay.html");
@@ -44,12 +45,16 @@
 
 			var callback = window.location.protocol + "//" + window.location.hostname;
 			if (window.location.port) callback += ":" + window.location.port;
-			callback += "/callback?status=success";
-			var upiURL = "upi://pay" + qs + "&url=" + encodeURIComponent(callback);
+			callback += "/callback?status=success&reference=" + encodeURIComponent(reference);
+
+			var upiURL = "upi://pay" + qs
+				+ "&refId=" + encodeURIComponent(reference)
+				+ "&url=" + encodeURIComponent(callback);
 
 			var label = "Scan QR or Pay using any UPI App<br>";
 			label += "Amount: \u20B9" + am + "  (" + cu + ")<br>";
 			label += "UPI ID: " + pa + "<br>";
+			label += "Reference: " + reference + "<br>";
 			document.getElementById("name").innerHTML = label;
 			document.getElementById("opayIntent").href = upiURL;
 
@@ -59,16 +64,20 @@
 				foreground: '#000',
 				size: 200,
 				level: 'H',
-				value: upiURL
+				value: upiURL,
 			});
 		})();
 
 		function payNow() {
-			const qs = window.location.search;
+			var qs = window.location.search;
+			var params = new URLSearchParams(qs);
+			var reference = params.get("reference") || "";
 			var callback = window.location.protocol + "//" + window.location.hostname;
 			if (window.location.port) callback += ":" + window.location.port;
-			callback += "/callback?status=success";
-			location.href = "upi://pay" + qs + "&url=" + encodeURIComponent(callback);
+			callback += "/callback?status=success&reference=" + encodeURIComponent(reference);
+			location.href = "upi://pay" + qs
+				+ "&refId=" + encodeURIComponent(reference)
+				+ "&url=" + encodeURIComponent(callback);
 		}
 	</script>
 </body>

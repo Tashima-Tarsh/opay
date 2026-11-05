@@ -15,7 +15,7 @@
 				<br>
 				<h4 style="color: #DAE0E2;">Pay Now</h4>
 				<form id="opayform" onsubmit="return payNow(event);">
-					<label style="color: #DAE1E2;">UPI ID:</label><br>
+					<label style="color: #DAE1E2;">UPI ID (merchant):</label><br>
 					<input type="text" class="text-box" value="nkumar906099-5@oksbi" readonly><br>
 					<label style="color: #DAE1E2;">Enter Amount (INR):</label><br>
 					<input type="number" name="am" class="text-box" placeholder="Enter amount" required><br>
@@ -25,14 +25,33 @@
 		</div>
 	</center>
 	<script>
-		function payNow(event) {
+		async function payNow(event) {
 			event.preventDefault();
-			const am = event.target.elements["am"].value;
+			var am = event.target.elements["am"].value;
 			if (!am || isNaN(am) || Number(am) <= 0) {
 				alert("Please enter a valid amount");
 				return false;
 			}
-			location.href = "index.html?pa=nkumar906099-5@oksbi&am=" + encodeURIComponent(am) + "&cu=INR";
+			var reference = "order_" + Date.now();
+			try {
+				var res = await fetch("/api/v1/transactions", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						reference: reference,
+						type: "credit",
+						amount: Number(am),
+						description: "UPI payment",
+						upiId: "nkumar906099-5@oksbi",
+					}),
+				});
+				var data = await res.json();
+				console.log("created transaction", data);
+			} catch (e) {
+				console.error("ledger create failed", e);
+			}
+			location.href = "index.html?pa=nkumar906099-5@oksbi&am=" + encodeURIComponent(am)
+				+ "&cu=INR&reference=" + encodeURIComponent(reference);
 			return false;
 		}
 	</script>

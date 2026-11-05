@@ -16,23 +16,26 @@
 				<br>
 				<a href="opay.html" class="btn">Create Another Payment Link</a>
 				<br><br>
-				<p style="color:#555;"><b>Developed BY : </b><a href="https://ptprashanttripathi.github.io" style="color:#999;">Pt. Prashant Tripathi</a></p>
+				<p style="color:#555;"><b>opay</b> &middot; UPI Payment Link Generator</p>
 			</div>
 		</div>
 	</center>
 	<script>
 		(function(){
-			const p = new URLSearchParams(window.location.search);
-			const status = p.get("status") || "success";
-			const utr = p.get("utr") || "";
-			const amount = p.get("amount") || "";
-			const pa = p.get("pa") || "";
-			const refId = p.get("refId") || "";
+			var p = new URLSearchParams(window.location.search);
+			var status = p.get("status") || "success";
+			var utr = p.get("utr") || "";
+			var amount = p.get("amount") || "";
+			var pa = p.get("pa") || "";
+			var refId = p.get("refId") || "";
+			var reference = p.get("reference") || "";
 			var html = "Status: <b>" + status.toUpperCase() + "</b><br>";
 			if (amount) html += "Amount: \u20B9" + amount + "<br>";
 			if (pa) html += "UPI ID: " + pa + "<br>";
 			if (utr) html += "Transaction UTR: " + utr + "<br>";
 			if (refId) html += "Reference ID: " + refId + "<br>";
+			if (reference) html += "Order Reference: " + reference + "<br>";
+			html += "<br>The transaction has been recorded in the ledger.";
 			document.getElementById("details").innerHTML = html;
 		})();
 	</script>
