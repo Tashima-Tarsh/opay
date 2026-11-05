@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>opay | Payment Failed</title>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<link rel="stylesheet" href="css/main.css">
+</head>
+<body>
+	<center>
+		<div class="card">
+			<div class="card-content">
+				<a href="opay.html"><img src="img/logo.svg" height="50"></a>
+				<h4 style="color:#c62828;">Payment Failed / Cancelled</h4>
+				<p id="details"></p>
+				<br>
+				<a href="opay.html" class="btn">Try Again</a>
+				<br><br>
+				<p style="color:#555;"><b>Developed BY : </b><a href="https://ptprashanttripathi.github.io" style="color:#999;">Pt. Prashant Tripathi</a></p>
+			</div>
+		</div>
+	</center>
+	<script>
+		(function(){
+			const p = new URLSearchParams(window.location.search);
+			const status = p.get("status") || "failed";
+			const utr = p.get("utr") || "";
+			const amount = p.get("amount") || "";
+			const pa = p.get("pa") || "";
+			var html = "Status: <b>" + status.toUpperCase() + "</b><br>";
+			if (amount) html += "Amount: \u20B9" + amount + "<br>";
+			if (pa) html += "UPI ID: " + pa + "<br>";
+			if (utr) html += "Transaction UTR: " + utr + "<br>";
+			html += "<br>The payment was not completed. Please try again.";
+			document.getElementById("details").innerHTML = html;
+		})();
+	</script>
+</body>
+</html>

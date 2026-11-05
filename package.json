@@ -1,24 +1,24 @@
 {
-  "name": "linkpe",
+  "name": "opay",
   "version": "1.0.0",
-  "description": "will describe later",
+  "description": "opay - UPI Payment Link Generator",
   "main": "index.html",
   "scripts": {
     "start": "node server.js 8081"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/PtPrashantTripathi/LinkPe.git"
+    "url": "git+https://github.com/PtPrashantTripathi/opay.git"
   },
   "keywords": [
-    "later"
+    "upi", "payment", "link-generator"
   ],
   "author": "Pt. Prashant Tripathi",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/PtPrashantTripathi/LinkPe/issues"
+    "url": "https://github.com/PtPrashantTripathi/opay/issues"
   },
-  "homepage": "https://github.com/PtPrashantTripathi/LinkPe#readme",
+  "homepage": "https://github.com/PtPrashantTripathi/opay#readme",
   "dependencies": {
     "express": "^4.22.1"
   }

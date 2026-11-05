@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<title>opay | Pay Now</title>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<link rel="stylesheet" href="css/main.css">
+</head>
+<body>
+	<center>
+		<div class="card">
+			<div class="card-content">
+				<a href=""><img src="img/logo.svg" height="50"></a>
+				<br>
+				<h4 style="color: #DAE0E2;">Pay Now</h4>
+				<form id="opayform" onsubmit="return payNow(event);">
+					<label style="color: #DAE1E2;">UPI ID:</label><br>
+					<input type="text" class="text-box" value="nkumar906099-5@oksbi" readonly><br>
+					<label style="color: #DAE1E2;">Enter Amount (INR):</label><br>
+					<input type="number" name="am" class="text-box" placeholder="Enter amount" required><br>
+					<button type="submit" class="btn">Pay Now</button>
+				</form>
+			</div>
+		</div>
+	</center>
+	<script>
+		function payNow(event) {
+			event.preventDefault();
+			const am = event.target.elements["am"].value;
+			if (!am || isNaN(am) || Number(am) <= 0) {
+				alert("Please enter a valid amount");
+				return false;
+			}
+			location.href = "index.html?pa=nkumar906099-5@oksbi&am=" + encodeURIComponent(am) + "&cu=INR";
+			return false;
+		}
+	</script>
+</body>
+
+</html>
