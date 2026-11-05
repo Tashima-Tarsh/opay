@@ -79,13 +79,18 @@ const server = createServer(async (req, res) => {
       const { id, amount, utr } = order;
       const details = `<p>${escape(order.name)} &middot; ${money(amount)}</p><p>Reference: ${id}</p>`;
       if (utr) return page(res, 'Payment confirmed', details);
+      const reference = id.replaceAll('-', '');
       const qr = await generateUPIQR({
         vpa: order.vpa, name: order.name, amount: amount / 100,
-        orderId: id.replaceAll('-', ''), mode: 'open',
+        orderId: reference, mode: 'open',
       });
+      // Use a transfer note for the app handoff and keep the QR payload as issued.
+      const intent = new URL(qr.upiUri);
+      intent.searchParams.delete('tr');
+      intent.searchParams.set('tn', reference);
       return page(res, 'Pay with UPI', details + `<p><img src="${qr.qrImage}" width="280" height="280"
-alt="Scan this QR code with your UPI app"></p><p><a href="${escape(qr.upiUri)}">Open UPI app</a></p>
-<p>You can also enter UPI ID <code>${escape(order.vpa)}</code> and amount ${money(amount)} directly in your UPI app.</p>
+alt="Scan this QR code with your UPI app"></p><p><a href="${escape(intent.href)}">Open UPI app</a></p>
+<p>If the button fails, open your UPI app and choose Pay by UPI ID. Enter <code>${escape(order.vpa)}</code> and ${money(amount)}. If your app accepts a note, use <code>${reference}</code>.</p>
 <p>Pending merchant confirmation. If you already paid, check your UPI app before retrying.</p><p><a href="/callback?reference=${id}">Check payment status</a></p>`);
     }
 
