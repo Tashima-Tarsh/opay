@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+.env.local
+.DS_Store
+*.log
+coverage/
+
+/upipay-orders.json
+/upipay-orders.json.tmp

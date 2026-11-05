@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: opay-upipay
+    runtime: node
+    plan: starter
+    region: singapore
+    rootDir: upipay
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    disk:
+      name: orders
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: UPIPAY_DATA_FILE
+        value: /var/data/upipay-orders.json
+      - key: MERCHANT_UPI_ID
+        sync: false
+      - key: UPIPAY_ADMIN_PASSWORD
+        sync: false
