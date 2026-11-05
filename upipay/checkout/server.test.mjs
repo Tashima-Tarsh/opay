@@ -54,6 +54,10 @@ test('merchant creates, shares, and confirms a UPI order', { timeout: 15000 }, a
   assert.match(pending, /data:image\/png;base64,/);
   assert.match(pending, /upi:\/\/pay\?pa=test%40ybl.*am=10\.25/);
   assert.match(pending, /Test &amp; Co/);
+  const uri = new URL(pending.match(/href="(upi:\/\/pay\?[^"]+)"/)[1].replaceAll('&amp;', '&'));
+  assert.equal(uri.searchParams.get('tr'), id.replaceAll('-', ''));
+  assert.equal(uri.searchParams.has('mode'), false);
+  assert.match(pending, /enter UPI ID <code>test@ybl<\/code>/);
   const returned = await fetch(url + '/callback?status=success&reference=' + id, { redirect: 'manual' });
   assert.equal(returned.status, 303);
   assert.equal(returned.headers.get('location'), checkout);
