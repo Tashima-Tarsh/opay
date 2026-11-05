@@ -4,13 +4,15 @@ var path = require("path");
 var { Ledger } = require("./ledger");
 var { IdempotencyStore } = require("./idempotency");
 
-const port = process.argv[2] || 8080;
+const port = process.env.PORT || process.argv[2] || 8080;
 
 // ---------- From-scratch ledger + idempotency (build-your-own) ----------
 var ledger = new Ledger();
 ledger.load();
 var idempotency = new IdempotencyStore();
 
+var ADMIN_USER = process.env.OPAY_ADMIN_USER || "admin";
+var ADMIN_PASS = process.env.OPAY_ADMIN_PASSWORD || "admin";
 var MERCHANT = { id: "merchant_default", name: "Merchant", upiId: "nkumar906099-5@oksbi" };
 ledger.ensureMerchant(MERCHANT.id, MERCHANT.name, MERCHANT.upiId);
 
@@ -53,7 +55,7 @@ app.get("/login", function (req, res) {
 app.post("/login", function (req, res) {
   var u = req.body.username || "";
   var p = req.body.password || "";
-  if (u === "admin" && p === "admin") {
+  if (u === ADMIN_USER && p === ADMIN_PASS) {
     var sid = "sess_" + Math.random().toString(36).slice(2);
     sessions[sid] = true;
     setSessionCookie(res, sid);
