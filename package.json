@@ -4,14 +4,17 @@
   "description": "opay - UPI Payment Link Generator",
   "main": "index.html",
   "scripts": {
-    "start": "node server.js 8081"
+    "start": "npm --prefix upipay start",
+    "postinstall": "npm --prefix upipay ci --include=dev && npm --prefix upipay run build"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/PtPrashantTripathi/opay.git"
   },
   "keywords": [
-    "upi", "payment", "link-generator"
+    "upi",
+    "payment",
+    "link-generator"
   ],
   "author": "Pt. Prashant Tripathi",
   "license": "MIT",

@@ -3,14 +3,14 @@ import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { generateUPIQR } from 'upipay/qr';
 
-const { MERCHANT_UPI_ID: vpa, MERCHANT_NAME: name = 'Merchant', UPIPAY_ADMIN_PASSWORD: password,
-  UPIPAY_DATA_FILE: dataFile = 'upipay-orders.json', HOST = '127.0.0.1', PORT = '8080' } = process.env;
+const { MERCHANT_UPI_ID: vpa, MERCHANT_NAME: name = 'Merchant', UPIPAY_ADMIN_PASSWORD: password = process.env.OPAY_ADMIN_PASSWORD,
+  UPIPAY_DATA_FILE: dataFile = 'upipay-orders.json', HOST = process.env.RENDER === 'true' ? '0.0.0.0' : '127.0.0.1', PORT = '8080' } = process.env;
 
 if (!vpa || !password) throw new Error('Set MERCHANT_UPI_ID and UPIPAY_ADMIN_PASSWORD before starting.');
 await generateUPIQR({ vpa, name, amount: 1, orderId: 'startup-check' });
 
 const digest = (value) => createHash('sha256').update(value).digest();
-const admin = digest('admin:' + password);
+const admin = digest((process.env.OPAY_ADMIN_USER || 'admin') + ':' + password);
 const csrf = randomUUID();
 const orders = new Map();
 
@@ -60,8 +60,18 @@ const server = createServer(async (req, res) => {
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Content-Security-Policy', "default-src 'none'; img-src data:; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
   try {
-    const path = new URL(req.url, 'http://localhost').pathname;
+    const url = new URL(req.url, 'http://localhost');
+    const path = url.pathname;
     if (req.method === 'GET' && path === '/health') return fail(res, 200, 'OK');
+
+    if (req.method === 'GET' && path === '/opay.html') return redirect(res, '/');
+
+    if (req.method === 'GET' && path === '/callback') {
+      const order = orders.get(url.searchParams.get('reference'));
+      if (!order) return fail(res, 404, 'Payment link not found.');
+      // Browser returns cannot verify that a UPI payment settled.
+      return redirect(res, '/pay/' + order.id);
+    }
 
     if (req.method === 'GET' && path.startsWith('/pay/')) {
       const order = orders.get(path.slice(5));
@@ -74,7 +84,7 @@ const server = createServer(async (req, res) => {
       });
       return page(res, 'Pay with UPI', details + `<p><img src="${qr.qrImage}" width="280" height="280"
 alt="Scan this QR code with your UPI app"></p><p><a href="${escape(qr.upiUri)}">Open UPI app</a></p>
-<p>Pending merchant confirmation. If you already paid, check your UPI app before retrying.</p>`);
+<p>Pending merchant confirmation. If you already paid, check your UPI app before retrying.</p><p><a href="/callback?reference=${id}">Check payment status</a></p>`);
     }
 
     if (path !== '/' && path !== '/orders' && path !== '/confirm') return fail(res, 404, 'Not found.');

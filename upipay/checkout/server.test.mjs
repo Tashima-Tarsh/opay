@@ -25,7 +25,7 @@ test('merchant creates, shares, and confirms a UPI order', { timeout: 15000 }, a
     child = spawn(process.execPath, ['checkout/server.mjs'], {
       env: {
         ...process.env, HOST: '127.0.0.1', PORT: '0', MERCHANT_UPI_ID: 'test@ybl',
-        MERCHANT_NAME: 'Test & Co', UPIPAY_ADMIN_PASSWORD: 'test-password',
+        MERCHANT_NAME: 'Test & Co', OPAY_ADMIN_USER: '', UPIPAY_ADMIN_PASSWORD: 'test-password',
         UPIPAY_DATA_FILE: join(dir, 'orders.json'),
       },
       stdio: ['ignore', 'pipe', 'inherit'],
@@ -54,7 +54,10 @@ test('merchant creates, shares, and confirms a UPI order', { timeout: 15000 }, a
   assert.match(pending, /data:image\/png;base64,/);
   assert.match(pending, /upi:\/\/pay\?pa=test%40ybl.*am=10\.25/);
   assert.match(pending, /Test &amp; Co/);
-  assert.equal((await fetch(url + '/callback?status=success&reference=' + id)).status, 404);
+  const returned = await fetch(url + '/callback?status=success&reference=' + id, { redirect: 'manual' });
+  assert.equal(returned.status, 303);
+  assert.equal(returned.headers.get('location'), checkout);
+  assert.match(await (await fetch(url + checkout)).text(), /Pending merchant confirmation/);
 
   const receipt = { csrf, id, utr: '123456789012' };
   assert.equal((await post('/confirm', receipt)).status, 303);
