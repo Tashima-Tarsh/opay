@@ -1,42 +1,60 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-	<title>Payment Successful</title>
-	<meta charset="utf-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1">
-	<link rel="stylesheet" href="css/main.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Payment successful &bull; opay</title>
+<link rel="stylesheet" href="css/main.css">
 </head>
 <body>
-	<center>
-		<div class="card">
-			<div class="card-content">
-				<a href="opay.html"><img src="img/logo.svg" height="50"></a>
-				<h4 style="color:#2e7d32;">Payment Successful</h4>
-				<p id="details"></p>
-				<br>
-				<a href="opay.html" class="btn">Create Another Payment Link</a>
-				<br><br>
-			</div>
-		</div>
-	</center>
-	<script>
-		(function(){
-			var p = new URLSearchParams(window.location.search);
-			var status = p.get("status") || "success";
-			var utr = p.get("utr") || "";
-			var amount = p.get("amount") || "";
-			var pa = p.get("pa") || "";
-			var refId = p.get("refId") || "";
-			var reference = p.get("reference") || "";
-			var html = "Status: <b>" + status.toUpperCase() + "</b><br>";
-			if (amount) html += "Amount: \u20B9" + amount + "<br>";
-			if (pa) html += "UPI ID: " + pa + "<br>";
-			if (utr) html += "Transaction UTR: " + utr + "<br>";
-			if (refId) html += "Reference ID: " + refId + "<br>";
-			if (reference) html += "Order Reference: " + reference + "<br>";
-			html += "<br>The transaction has been recorded in the ledger.";
-			document.getElementById("details").innerHTML = html;
-		})();
-	</script>
+<div class="page">
+  <div class="surface padded" style="max-width:480px;width:100%;text-align:center;">
+    <div class="brand" style="margin:0 auto 20px;">
+      <div class="mark">&#9650;</div>
+      <div>
+        <div class="brand-name">opay</div>
+        <div class="brand-sub">Payment confirmed</div>
+      </div>
+    </div>
+
+    <div class="mark" style="font-size:48px;margin:0 auto 16px;">&#10004;</div>
+
+    <h1>Payment successful</h1>
+    <p class="small">Your payment has been received and recorded in the ledger.</p>
+
+    <div id="details" style="margin:24px 0;text-align:left;"></div>
+
+    <div class="toolbar" style="justify-content:center;gap:10px;">
+      <a href="/opay.html" class="btn btn-primary">Create another link</a>
+      <a href="/ledger" class="btn btn-outline">View ledger</a>
+    </div>
+  </div>
+</div>
+
+<script>
+  (function(){
+    var p = new URLSearchParams(window.location.search);
+    var amount = p.get("amount") || "";
+    var pa = p.get("pa") || "";
+    var utr = p.get("utr") || "";
+    var refId = p.get("refId") || "";
+    var reference = p.get("reference") || "";
+
+    var rows = [];
+    if (amount) rows.push({label:"Amount", value:"&#8377;" + amount});
+    if (pa) rows.push({label:"UPI ID", value:pa});
+    if (utr) rows.push({label:"Transaction UTR", value:utr});
+    if (refId) rows.push({label:"Reference ID", value:refId});
+    if (reference) rows.push({label:"Order Reference", value:reference});
+
+    var html = '<table style="width:100%;border-collapse:collapse;font-size:var(--size-xs);">';
+    rows.forEach(function (r) {
+      html += '<tr><td style="padding:7px 0;border-bottom:1px solid var(--color-slate-100);color:var(--color-slate-500);width:40%;">' + r.label + '</td><td style="padding:7px 0;border-bottom:1px solid var(--color-slate-100);text-align:right;font-weight:var(--weight-semibold);color:var(--color-slate-800);">' + r.value + '</td></tr>';
+    });
+    html += '</table>';
+
+    document.getElementById("details").innerHTML = rows.length ? html : '<p class="small muted">No transaction details available.</p>';
+  })();
+</script>
 </body>
 </html>

@@ -1,85 +1,103 @@
 <!DOCTYPE html>
-<html>
-
+<html lang="en">
 <head>
-	<title>Pay Now</title>
-	<meta charset="utf-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1">
-	<link rel="stylesheet" href="css/main.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Create payment link &bull; opay</title>
+<link rel="stylesheet" href="css/main.css">
 </head>
 <body>
-	<center>
-		<div class="card">
-			<div class="card-content">
-				<a href=""><img src="img/logo.svg" height="50"></a>
-				<br>
-				<h4 style="color: #DAE0E2;">Pay Now</h4>
-				<form id="opayform" onsubmit="return payNow(event);">
-					<label style="color: #DAE1E2;">UPI ID (merchant):</label><br>
-					<input type="text" class="text-box" value="nkumar906099-5@oksbi" readonly><br>
-					<label style="color: #DAE1E2;">Enter Amount (INR):</label><br>
-					<input type="number" name="am" class="text-box" placeholder="Enter amount" required><br>
-					<button type="submit" class="btn" id="payBtn">Pay Now</button>
-				</form>
-				<div id="payErr" style="color:#c62828; margin-top:8px; display:none;"></div>
-			</div>
-		</div>
-	</center>
-	<script>
-		async function payNow(event) {
-			event.preventDefault();
-			var btn = document.getElementById("payBtn");
-			var err = document.getElementById("payErr");
-			err.style.display = "none";
-			err.textContent = "";
-			btn.disabled = true;
-			btn.textContent = "Creating...";
+<div class="page">
+  <div class="surface padded" style="max-width:460px;width:100%;">
+    <div class="brand">
+      <div class="mark">&#9650;</div>
+      <div>
+        <div class="brand-name">opay</div>
+        <div class="brand-sub">Create a payment link</div>
+      </div>
+    </div>
 
-			var am = event.target.elements["am"].value;
-			if (!am || isNaN(am) || Number(am) <= 0) {
-				err.textContent = "Please enter a valid amount";
-				err.style.display = "block";
-				btn.disabled = false;
-				btn.textContent = "Pay Now";
-				return false;
-			}
+    <h1>New payment link</h1>
+    <p class="small">Enter the amount to collect. The customer pays by scanning the QR or opening the UPI intent link.</p>
 
-			var reference = "order_" + Date.now();
-			var created = false;
-			try {
-				var res = await fetch("/api/v1/transactions", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						reference: reference,
-						type: "credit",
-						amount: Number(am),
-						description: "UPI payment",
-						upiId: "nkumar906099-5@oksbi",
-					}),
-				});
-				if (!res.ok) {
-					var txt = await res.text();
-					throw new Error("Ledger create failed: " + res.status + " " + txt);
-				}
-				var data = await res.json();
-				console.log("created transaction", data);
-				created = true;
-			} catch (e) {
-				console.error("ledger create failed", e);
-				err.textContent = e.message || "Could not create payment. Try again.";
-				err.style.display = "block";
-				btn.disabled = false;
-				btn.textContent = "Pay Now";
-				return false;
-			}
+    <div id="payErr" class="notice error" style="display:none;"></div>
 
-			btn.textContent = "Redirecting...";
-			location.href = "index.html?pa=nkumar906099-5@oksbi&am=" + encodeURIComponent(am)
-				+ "&cu=INR&reference=" + encodeURIComponent(reference);
-			return false;
-		}
-	</script>
+    <form id="opayform" class="form" onsubmit="return payNow(event);" novalidate>
+      <div class="field">
+        <label>UPI ID (merchant)</label>
+        <input type="text" value="nkumar906099-5@oksbi" readonly>
+        <p class="field-helper">Fixed merchant VPA — customers pay to this address.</p>
+      </div>
+      <div class="field">
+        <label>Amount (INR)</label>
+        <input type="number" name="am" class="text-box" placeholder="0.00" min="0" step="0.01" required>
+        <p class="field-helper">Amount in rupees. Paise are handled automatically.</p>
+      </div>
+      <button type="submit" class="btn btn-primary btn-full" id="payBtn">Create payment link</button>
+    </form>
+
+    <div class="divider"></div>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;">
+      <a href="/ledger" class="secondary" style="font-size:var(--size-xs);">View ledger &rarr;</a>
+      <a href="/login" class="secondary" style="font-size:var(--size-xs);">Sign out &rarr;</a>
+    </div>
+  </div>
+</div>
+
+<script>
+  async function payNow(event) {
+    event.preventDefault();
+    var btn = document.getElementById("payBtn");
+    var err = document.getElementById("payErr");
+    err.style.display = "none";
+    err.textContent = "";
+    btn.disabled = true;
+    btn.classList.add("loading");
+    btn.textContent = "";
+
+    var am = event.target.elements["am"].value;
+    if (!am || isNaN(am) || Number(am) <= 0) {
+      err.textContent = "Please enter a valid amount greater than zero.";
+      err.style.display = "flex";
+      btn.disabled = false;
+      btn.classList.remove("loading");
+      btn.textContent = "Create payment link";
+      return false;
+    }
+
+    var reference = "order_" + Date.now();
+    try {
+      var res = await fetch("/api/v1/transactions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reference: reference,
+          type: "credit",
+          amount: Number(am) * 100,
+          description: "UPI payment",
+          upiId: "nkumar906099-5@oksbi",
+        }),
+      });
+      if (!res.ok) {
+        var txt = await res.text();
+        throw new Error("Could not create payment link (" + res.status + ").");
+      }
+      var data = await res.json();
+    } catch (e) {
+      err.textContent = e.message || "Could not create payment link. Try again.";
+      err.style.display = "flex";
+      btn.disabled = false;
+      btn.classList.remove("loading");
+      btn.textContent = "Create payment link";
+      return false;
+    }
+
+    btn.textContent = "Redirecting...";
+    location.href = "index.html?pa=nkumar906099-5@oksbi&am=" + encodeURIComponent(am)
+      + "&cu=INR&reference=" + encodeURIComponent(reference);
+    return false;
+  }
+</script>
 </body>
-
 </html>

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign in &bull; opay</title>
+<link rel="stylesheet" href="css/main.css">
+</head>
+<body>
+<div class="page">
+  <div class="surface padded" style="max-width:420px;width:100%;">
+    <div class="brand">
+      <div class="mark">&#9650;</div>
+      <div>
+        <div class="brand-name">opay</div>
+        <div class="brand-sub">UPI Payment Ledger</div>
+      </div>
+    </div>
+
+    <h1>Welcome back</h1>
+    <p class="small">Sign in to access the payment ledger and dashboard.</p>
+
+    <div id="err" class="notice error" style="display:none;">
+      Invalid username or password. Use <b>admin</b> / <b>admin</b>.
+    </div>
+
+    <form id="loginForm" class="form" novalidate>
+      <div class="field">
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username" placeholder="admin" autocomplete="username" autocapitalize="none">
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;" autocomplete="current-password">
+      </div>
+      <button type="submit" class="btn btn-primary btn-full" id="signinBtn">Sign in</button>
+    </form>
+
+    <div class="footer" style="margin-top:24px;text-align:center;">
+      <a href="/opay.html" class="secondary" style="font-size:var(--size-xs);">Create a payment link</a>
+    </div>
+  </div>
+</div>
+
+<script>
+  document.getElementById("loginForm").addEventListener("submit", async function (e) {
+    e.preventDefault();
+    var err = document.getElementById("err");
+    var btn = document.getElementById("signinBtn");
+    err.style.display = "none";
+    btn.disabled = true;
+    btn.classList.add("loading");
+    btn.textContent = "";
+    var fd = new FormData(this);
+    try {
+      var res = await fetch("/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "username=" + encodeURIComponent(fd.get("username")) + "&password=" + encodeURIComponent(fd.get("password")),
+        credentials: "same-origin",
+      });
+      if (res.ok) {
+        location.href = "/ledger";
+      } else {
+        err.style.display = "flex";
+        btn.disabled = false;
+        btn.classList.remove("loading");
+        btn.textContent = "Sign in";
+      }
+    } catch (e) {
+      err.textContent = "Could not reach the server.";
+      err.style.display = "flex";
+      btn.disabled = false;
+      btn.classList.remove("loading");
+      btn.textContent = "Sign in";
+    }
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ledger &bull; opay</title>
+<link rel="stylesheet" href="css/main.css">
+</head>
+<body>
+<div class="app">
+  <div class="brand">
+    <div class="mark">&#9650;</div>
+    <div>
+      <div class="brand-name">opay Ledger</div>
+      <div class="brand-sub">Payment ledger &bull; admin</div>
+    </div>
+  </div>
+
+  <div class="notice info" style="margin-top:12px;">
+    <b>How it works:</b> Create a payment link on the home page &rarr; customer pays via UPI &rarr; the UPI app returns here via callback &rarr; the transaction is recorded automatically in this ledger.
+  </div>
+
+  <div class="toolbar" style="margin-top:16px;">
+    <button class="btn btn-primary" onclick="loadData()">&#8635; Refresh</button>
+    <span class="small" id="updated">Updated: &ndash;</span>
+    <a href="/logout" class="btn btn-ghost" style="margin-left:auto;">Sign out</a>
+  </div>
+
+  <h2>Merchant Overview</h2>
+  <p class="small muted">All amounts are in the smallest currency unit (paise for INR).</p>
+  <div class="stat-group" id="stats"></div>
+
+  <div class="section">
+    <div class="section-head">
+      <h3>Transactions</h3>
+    </div>
+    <div class="table-wrap" id="txnTableWrap"></div>
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <h3>Ledger Entries</h3>
+      <span class="small muted" id="ledgerCount">0 entries</span>
+    </div>
+    <div class="table-wrap" id="ledgerTableWrap"></div>
+  </div>
+
+  <div class="footer" style="margin-top:32px;text-align:center;">
+    <b>opay</b> &middot; From-scratch append-only ledger + UPI payment gateway demo &middot; Not connected to a real bank
+  </div>
+</div>
+
+<script>
+  var BASE = "";
+  var statsEl = document.getElementById("stats");
+  var txnWrap = document.getElementById("txnTableWrap");
+  var ledgerWrap = document.getElementById("ledgerTableWrap");
+  var updatedEl = document.getElementById("updated");
+  var ledgerCountEl = document.getElementById("ledgerCount");
+
+  function statusBadge(s) {
+    var cls = s === "completed" ? "completed" : (s === "failed" ? "failed" : "pending");
+    return '<span class="badge ' + cls + '">' + s.toUpperCase() + '</span>';
+  }
+  function amt(a, type) {
+    var sign = type === "debit" ? "\u2212" : "+";
+    var cls = type === "debit" ? "amount debit" : "amount credit";
+    return '<span class="' + cls + '">' + sign + "\u20B9" + a + "</span>";
+  }
+  function fmtTime(ms) {
+    if (!ms) return "&ndash;";
+    var d = new Date(parseInt(ms));
+    return d.toLocaleString();
+  }
+
+  async function loadData() {
+    var btn = document.querySelector("button.primary");
+    var old = btn.textContent;
+    btn.textContent = "Loading...";
+    btn.disabled = true;
+    try {
+      var [balRes, txnRes, ledRes] = await Promise.all([
+        fetch("/api/v1/balance", { credentials: "same-origin" }),
+        fetch("/api/v1/transactions?status=&page=1&limit=50", { credentials: "same-origin" }),
+        fetch("/api/v1/ledger?page=1&limit=50", { credentials: "same-origin" }),
+      ]);
+      var balance = await balRes.json();
+      var txns = await txnRes.json();
+      var led = await ledRes.json();
+
+      renderStats(balance, txns);
+      renderTransactions(txns);
+      renderLedger(led);
+      var now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      updatedEl.textContent = "Updated: " + now;
+    } catch (e) {
+      alert("Failed to load data: " + e.message);
+    } finally {
+      btn.textContent = old;
+      btn.disabled = false;
+    }
+  }
+
+  function renderStats(balance, txns) {
+    var total = txns.total || 0;
+    var completed = (txns.transactions || []).filter(function (t) { return t.status === "completed"; }).length;
+    var pending = (txns.transactions || []).filter(function (t) { return t.status === "pending"; }).length;
+    var failed = (txns.transactions || []).filter(function (t) { return t.status === "failed"; }).length;
+
+    statsEl.innerHTML = [
+      statCard("Total Transactions", total, "blue"),
+      statCard("Balance", "\u20B9" + (balance.balance || 0), "green", "available"),
+      statCard("Completed", completed, "green"),
+      statCard("Pending", pending, "amber"),
+      statCard("Failed", failed, "red"),
+    ].join("");
+  }
+
+  function statCard(label, value, color, meta) {
+    var cls = "value " + color;
+    return '<div class="stat">' +
+      '<div class="label">' + label + '</div>' +
+      '<div class="' + cls + '">' + value + '</div>' +
+      (meta ? '<div class="meta">' + meta + '</div>' : '') +
+      '</div>';
+  }
+
+  function renderTransactions(txns) {
+    var rows = (txns.transactions || []);
+    if (rows.length === 0) {
+      txnWrap.innerHTML = '<div class="empty"><div class="icon">&#128199;</div><div class="title">No transactions yet</div><div class="desc">Create a payment link to get started.</div></div>';
+      return;
+    }
+    var html = '<table><thead><tr>' +
+      '<th>Reference</th>' +
+      '<th>UPI ID</th>' +
+      '<th>Amount</th>' +
+      '<th>Type</th>' +
+      '<th>Status</th>' +
+      '<th>UTR</th>' +
+      '<th>Created</th>' +
+      '</tr></thead><tbody>';
+    rows.forEach(function (t) {
+      html += '<tr>' +
+        '<td><span class="ref">' + (t.reference || "&ndash;") + '</span></td>' +
+        '<td><span class="ref">' + (t.upiId || "&ndash;") + '</span></td>' +
+        '<td>' + amt(t.amount, t.type) + '</td>' +
+        '<td>' + (t.type || "credit").toUpperCase() + '</td>' +
+        '<td>' + statusBadge(t.status) + '</td>' +
+        '<td><span class="ref small">' + (t.utr || "&ndash;") + '</span></td>' +
+        '<td>' + fmtTime(t.createdAt) + '</td>' +
+        '</tr>';
+    });
+    html += '</tbody></table>';
+    txnWrap.innerHTML = html;
+  }
+
+  function renderLedger(led) {
+    var entries = led.entries || [];
+    ledgerCountEl.textContent = entries.length + " entr" + (entries.length === 1 ? "y" : "ies");
+    if (entries.length === 0) {
+      ledgerWrap.innerHTML = '<div class="empty"><div class="icon">&#128214;</div><div class="title">No ledger entries yet</div><div class="desc">Entries appear when a payment reaches a terminal state.</div></div>';
+      return;
+    }
+    var html = '<table><thead><tr>' +
+      '<th>Entry ID</th>' +
+      '<th>Transaction</th>' +
+      '<th>Type</th>' +
+      '<th>Amount</th>' +
+      '<th>Balance After</th>' +
+      '<th>Created</th>' +
+      '</tr></thead><tbody>';
+    entries.forEach(function (e) {
+      html += '<tr>' +
+        '<td><span class="ref small">' + (e.id || "&ndash;") + '</span></td>' +
+        '<td><span class="ref small">' + (e.transactionId || "&ndash;") + '</span></td>' +
+        '<td>' + (e.type || "credit").toUpperCase() + '</td>' +
+        '<td>' + amt(e.amount, e.type) + '</td>' +
+        '<td><span class="amount credit">\u20B9' + e.balanceAfter + '</span></td>' +
+        '<td>' + fmtTime(e.createdAt) + '</td>' +
+        '</tr>';
+    });
+    html += '</tbody></table>';
+    ledgerWrap.innerHTML = html;
+  }
+
+  loadData();
+</script>
+</body>
+</html>

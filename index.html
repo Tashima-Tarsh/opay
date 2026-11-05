@@ -1,85 +1,108 @@
 <!DOCTYPE html>
-<html>
-
+<html lang="en">
 <head>
-	<title>Pay Now</title>
-	<meta charset="utf-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1">
-	<link rel="stylesheet" href="css/main.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Checkout &bull; opay</title>
+<link rel="stylesheet" href="css/main.css">
 </head>
 <body>
-	<center>
-		<div class="card">
-			<div class="card-content">
-				<a href="opay.html"><img src="img/logo.svg" height="50"></a>
-				<h5 id="name" style="color: #101010;"></h5>
-				<canvas id="qr"></canvas>
-				<div style="margin-top: 2px;">
-					<a id="opayIntent">
-						<img src="img/upi.png" height="80">
-						<br>
-						<button class='btn'>Pay with UPI App</button>
-					</a>
-				</div>
-				<br>
-				<button class="btn" onclick="payNow()" style="background:#019031;">Pay Now (UPI Intent)</button>
-				<br><br>
-				<a href="opay.html" style="color: #777;">Back</a>
-			</div>
-		</div>
-	</center>
-	<script src="qrious/qrious.min.js"></script>
-	<script>
-		(function () {
-			var qs = window.location.search;
-			var params = new URLSearchParams(qs);
-			var pa = params.get("pa") || "";
-			var am = params.get("am") || "";
-			var cu = params.get("cu") || "INR";
-			var reference = params.get("reference") || "";
+<div class="page">
+  <div class="surface padded" style="max-width:520px;width:100%;">
+    <div class="brand">
+      <div class="mark">&#9650;</div>
+      <div>
+        <div class="brand-name">opay</div>
+        <div class="brand-sub">Secure checkout</div>
+      </div>
+    </div>
 
-			if (!pa) {
-				location.replace("opay.html");
-				return;
-			}
+    <div id="missing" class="notice error" style="display:none;">
+      Missing payment details. <a href="/opay.html">Start over &rarr;</a>
+    </div>
 
-			var host = window.location.protocol + "//" + window.location.hostname;
-			if (window.location.port) host += ":" + window.location.port;
-			var callback = host + "/callback?status=success&reference=" + encodeURIComponent(reference);
+    <div id="checkout" style="display:none;">
+      <h2 id="amountTitle">Pay &#8377;<span id="amountDisp">0</span></h2>
+      <p class="small muted" style="margin-bottom:24px;">Scan the QR with any UPI app, or tap the button below to pay.</p>
 
-			// Single source of truth for the UPI intent URL — used by both QR and Pay Now button.
-			window.buildUpiUrl = function buildUpiUrl() {
-				return "upi://pay"
-					+ "?pa=" + encodeURIComponent(pa)
-					+ "&am=" + encodeURIComponent(am)
-					+ "&cu=" + encodeURIComponent(cu)
-					+ (reference ? "&tn=" + encodeURIComponent(reference) : "")
-					+ "&url=" + encodeURIComponent(callback);
-			};
+      <div class="surface compact" style="text-align:center;padding:28px 24px;background:var(--color-ground-alt);border:none;">
+        <canvas id="qr" width="260" height="260" style="width:260px;height:260px;display:block;margin:0 auto 16px;"></canvas>
+        <div id="upiIdDisp" class="ref small" style="display:block;margin-bottom:4px;"></div>
+        <div id="refDisp" class="ref small" style="display:block;margin-bottom:16px;"></div>
+      </div>
 
-			var upiURL = buildUpiUrl();
+      <div class="toolbar" style="justify-content:center;margin-bottom:20px;">
+        <a id="upiBtn" class="btn btn-primary btn-lg btn-full" style="width:100%;">
+          &#9679; Pay with UPI App
+        </a>
+      </div>
 
-			var label = "Scan QR or Pay using any UPI App<br>";
-			label += "Amount: \u20B9" + am + "  (" + cu + ")<br>";
-			label += "UPI ID: " + pa + "<br>";
-			if (reference) label += "Reference: " + reference + "<br>";
-			document.getElementById("name").innerHTML = label;
-			document.getElementById("opayIntent").href = upiURL;
+      <div class="notice info" style="margin-top:20px;">
+        <span style="font-size:var(--size-xs);">The transaction will be recorded in your ledger once the payment completes.</span>
+      </div>
 
-			new QRious({
-				element: document.getElementById('qr'),
-				background: '#fff',
-				foreground: '#000',
-				size: 200,
-				level: 'H',
-				value: upiURL,
-			});
-		})();
+      <div style="margin-top:24px;text-align:center;">
+        <a href="/opay.html" class="secondary" style="font-size:var(--size-xs);">&#8592; Create another link</a>
+      </div>
+    </div>
+  </div>
+</div>
 
-		function payNow() {
-			location.href = buildUpiUrl();
-		}
-	</script>
+<script src="qrious/qrious.min.js"></script>
+<script>
+  (function () {
+    var qs = window.location.search;
+    var params = new URLSearchParams(qs);
+    var pa = params.get("pa") || "";
+    var am = params.get("am") || "";
+    var cu = params.get("cu") || "INR";
+    var reference = params.get("reference") || "";
+
+    var missingEl = document.getElementById("missing");
+    var checkoutEl = document.getElementById("checkout");
+
+    if (!pa || !am) {
+      missingEl.style.display = "flex";
+      checkoutEl.style.display = "none";
+      return;
+    }
+
+    var host = window.location.protocol + "//" + window.location.hostname;
+    if (window.location.port) host += ":" + window.location.port;
+    var callback = host + "/callback?status=success&reference=" + encodeURIComponent(reference);
+
+    window.buildUpiUrl = function buildUpiUrl() {
+      return "upi://pay"
+        + "?pa=" + encodeURIComponent(pa)
+        + "&am=" + encodeURIComponent(am)
+        + "&cu=" + encodeURIComponent(cu)
+        + (reference ? "&tn=" + encodeURIComponent(reference) : "")
+        + "&url=" + encodeURIComponent(callback);
+    };
+
+    var upiURL = buildUpiUrl();
+
+    document.getElementById("amountDisp").textContent = am;
+    document.getElementById("upiIdDisp").textContent = "UPI ID: " + pa;
+    if (reference) {
+      document.getElementById("refDisp").textContent = "Reference: " + reference;
+    } else {
+      document.getElementById("refDisp").style.display = "none";
+    }
+    document.getElementById("upiBtn").href = upiURL;
+
+    new QRious({
+      element: document.getElementById('qr'),
+      background: '#fff',
+      foreground: '#000',
+      size: 260,
+      level: 'H',
+      value: upiURL,
+    });
+
+    missingEl.style.display = "none";
+    checkoutEl.style.display = "block";
+  })();
+</script>
 </body>
-
 </html>
