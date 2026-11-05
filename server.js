@@ -143,10 +143,8 @@ app.get("/callback", function (req, res) {
   }
 });
 
-// ---------- Protected API ----------
-app.use("/api", requireAuth);
-
-// POST /api/v1/transactions (idempotent, 202 Accepted)
+// ---------- Public API (no auth needed) ----------
+// POST /api/v1/transactions (idempotent, 202 Accepted) — called from public opay.html
 app.post("/api/v1/transactions", function (req, res) {
   var body = req.body;
   var reference = body.reference;
@@ -179,13 +177,13 @@ app.post("/api/v1/transactions", function (req, res) {
   return res.status(202).json(response);
 });
 
-app.get("/api/v1/transactions/:id", function (req, res) {
+app.get("/api/v1/transactions/:id", requireAuth, function (req, res) {
   var txn = ledger.getTransaction(req.params.id);
   if (!txn) return res.status(404).json({ error: "transaction not found" });
   res.json(txn);
 });
 
-app.get("/api/v1/transactions", function (req, res) {
+app.get("/api/v1/transactions", requireAuth, function (req, res) {
   var result = ledger.listTransactions({
     merchantId: MERCHANT.id,
     status: req.query.status,
@@ -195,11 +193,11 @@ app.get("/api/v1/transactions", function (req, res) {
   res.json(result);
 });
 
-app.get("/api/v1/balance", function (req, res) {
+app.get("/api/v1/balance", requireAuth, function (req, res) {
   res.json({ merchantId: MERCHANT.id, balance: ledger.getBalance(MERCHANT.id) });
 });
 
-app.get("/api/v1/ledger", function (req, res) {
+app.get("/api/v1/ledger", requireAuth, function (req, res) {
   var result = ledger.listLedger({
     merchantId: MERCHANT.id,
     page: parseInt(req.query.page) || 1,
