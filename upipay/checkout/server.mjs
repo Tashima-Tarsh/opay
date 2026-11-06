@@ -1,4 +1,4 @@
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { generateUPIQR } from 'upipay/qr';
@@ -13,6 +13,9 @@ const digest = (value) => createHash('sha256').update(value).digest();
 const admin = digest((process.env.OPAY_ADMIN_USER || 'admin') + ':' + password);
 const csrf = randomUUID();
 const orders = new Map();
+const webhookUrl = process.env.OPAY_WEBHOOK_URL || '';
+const webhookSecret = process.env.OPAY_WEBHOOK_SECRET || '';
+if (webhookUrl && (!webhookUrl.startsWith('https://') || webhookSecret.length < 32)) throw new Error('Secure webhook URL and secret required.');
 const checkoutMinutes = Math.max(1, Math.min(60, Number(process.env.OPAY_CHECKOUT_MINUTES || 10)));
 
 
@@ -21,6 +24,38 @@ try {
 } catch (error) {
   if (error.code !== 'ENOENT') throw error;
 }
+
+const outboxFile = dataFile + '.outbox';
+let outbox = [];
+try { outbox = JSON.parse(readFileSync(outboxFile, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+function persistOutbox() {
+  writeFileSync(outboxFile + '.tmp', JSON.stringify(outbox), { mode: 0o600 });
+  renameSync(outboxFile + '.tmp', outboxFile);
+}
+function queueEvent(order, event) {
+  if (!webhookUrl) return;
+  outbox.push({ id: randomUUID(), event, orderId: order.id, amountPaise: order.amount, occurredAt: new Date().toISOString(), attempts: 0, nextAt: Date.now() });
+  persistOutbox();
+}
+async function deliverEvents() {
+  if (!webhookUrl) return;
+  for (const item of outbox.filter(x => x.nextAt <= Date.now()).slice(0, 10)) {
+    const payload = JSON.stringify({ id: item.id, event: item.event, orderId: item.orderId, amountPaise: item.amountPaise, occurredAt: item.occurredAt });
+    const timestamp = String(Date.now());
+    const signature = createHmac('sha256', webhookSecret).update(timestamp + '.' + payload).digest('hex');
+    try {
+      const response = await fetch(webhookUrl, { method: 'POST', headers: { 'content-type': 'application/json', 'x-opay-timestamp': timestamp, 'x-opay-signature': signature, 'x-opay-event-id': item.id }, body: payload, signal: AbortSignal.timeout(5000) });
+      if (!response.ok) throw new Error('Webhook HTTP ' + response.status);
+      outbox.splice(outbox.indexOf(item), 1);
+    } catch (error) {
+      item.attempts++;
+      item.nextAt = Date.now() + Math.min(3600000, 5000 * 2 ** Math.min(item.attempts, 10));
+      console.error('Webhook retry scheduled:', item.id, String(error));
+    }
+    persistOutbox();
+  }
+}
+setInterval(() => { void deliverEvents(); }, 5000).unref();
 
 function save(order) {
   const next = new Map(orders);
@@ -83,7 +118,11 @@ const server = createServer(async (req, res) => {
       if (order.utr) return redirect(res, '/pay/' + order.id);
       if (order.expiresAt && Date.now() >= Date.parse(order.expiresAt)) return redirect(res, '/pay/' + order.id);
       const qr = await generateUPIQR({ vpa: order.vpa, name: order.name, amount: order.amount / 100, orderId: order.id.replaceAll('-', ''), mode: 'open' });
-      save({ ...order, launchedAt: new Date().toISOString() });
+      if (!order.launchedAt) {
+        const updated = { ...order, launchedAt: new Date().toISOString() };
+        save(updated);
+        queueEvent(updated, 'PAYMENT_INITIATED');
+      }
       // This redirect initiates UPI; it does not prove the payment succeeded.
       res.writeHead(302, { Location: qr.upiUri }).end();
       return;
@@ -93,7 +132,11 @@ const server = createServer(async (req, res) => {
       const order = orders.get(url.searchParams.get('reference'));
       if (!order) return fail(res, 404, 'Payment link not found.');
       // App/browser return is an unverified observation, never payment proof.
-      if (!order.utr && !order.returnedAt) save({ ...order, returnedAt: new Date().toISOString() });
+      if (!order.utr && !order.returnedAt && order.launchedAt) {
+        const updated = { ...order, returnedAt: new Date().toISOString() };
+        save(updated);
+        queueEvent(updated, 'CHECKOUT_RETURN_OBSERVED');
+      }
       return redirect(res, '/pay/' + order.id);
     }
 
@@ -111,7 +154,7 @@ const server = createServer(async (req, res) => {
       });
       return page(res, 'Pay with UPI', details + `<p><img src="${qr.qrImage}" width="280" height="280"
 alt="Scan this QR code with your UPI app"></p><p>${expired ? "Checkout expired; do not retry this order." : `<a href="/launch/${id}">Pay using UPI app</a>`}</p>
-<p>You can also enter UPI ID <code>${escape(order.vpa)}</code> and amount ${money(amount)} directly in your UPI app.</p>
+<p>Choose any installed UPI app when prompted. Google Pay, PhonePe and Paytm availability depends on the device.</p><p>You can also enter UPI ID <code>${escape(order.vpa)}</code> and amount ${money(amount)} directly in your UPI app.</p>
 <p>Order status: <strong>${state}</strong>. Returning from a UPI app never confirms receipt.</p><p>Expires: ${escape(order.expiresAt || "Not set")}</p><p><a href="/callback?reference=${id}">I returned from my UPI app (check status)</a></p><p><a href="/api/order-status/${id}">Read order status JSON</a></p>`);
     }
 
