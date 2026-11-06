@@ -5,7 +5,7 @@
   "main": "index.html",
   "scripts": {
     "start": "npm --prefix upipay start",
-    "postinstall": "npm --prefix upipay install --include=dev && npm --prefix upipay run build"
+    "postinstall": "npm --prefix upipay ci --include=dev && npm --prefix upipay run build"
   },
   "repository": {
     "type": "git",
