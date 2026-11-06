@@ -1,23 +1,41 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { generateUPIQR } from 'upipay/qr';
+import pg from 'pg';
+import { validateQRRequest } from 'upipay/utils';
 
 const { MERCHANT_UPI_ID: vpa, MERCHANT_NAME: name = 'Merchant', UPIPAY_ADMIN_PASSWORD: password = process.env.OPAY_ADMIN_PASSWORD,
   UPIPAY_DATA_FILE: dataFile = 'upipay-orders.json', HOST = process.env.RENDER === 'true' ? '0.0.0.0' : '127.0.0.1', PORT = '8080' } = process.env;
 
 if (!vpa || !password) throw new Error('Set MERCHANT_UPI_ID and UPIPAY_ADMIN_PASSWORD before starting.');
-await generateUPIQR({ vpa, name, amount: 1, orderId: 'startup-check' });
+validateQRRequest({ vpa, name, amount: 1, orderId: 'startup-check' });
 
 const digest = (value) => createHash('sha256').update(value).digest();
 const admin = digest((process.env.OPAY_ADMIN_USER || 'admin') + ':' + password);
 const csrf = randomUUID();
 const orders = new Map();
+const db = process.env.UPIPAY_DATABASE_URL
+  ? new pg.Pool({ connectionString: process.env.UPIPAY_DATABASE_URL, max: 4, connectionTimeoutMillis: 5000 })
+  : null;
 
-try {
-  for (const order of JSON.parse(readFileSync(dataFile, 'utf8'))) orders.set(order.id, order);
-} catch (error) {
-  if (error.code !== 'ENOENT') throw error;
+if (db) {
+  db.on('error', (error) => console.error('Idle Postgres connection failed:', error.code));
+  await db.query(`CREATE TABLE IF NOT EXISTS opay_checkout_orders (
+    id text PRIMARY KEY, amount integer NOT NULL, vpa text NOT NULL, name text NOT NULL,
+    utr text UNIQUE, created_at timestamptz NOT NULL DEFAULT now()
+  )`);
+} else {
+  try {
+    for (const order of JSON.parse(readFileSync(dataFile, 'utf8'))) orders.set(order.id, order);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+}
+
+async function findOrder(id) {
+  if (!db) return orders.get(id);
+  const { rows } = await db.query('SELECT id, amount, vpa, name, utr FROM opay_checkout_orders WHERE id = $1', [id]);
+  return rows[0];
 }
 
 function save(order) {
@@ -67,25 +85,21 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && path === '/opay.html') return redirect(res, '/');
 
     if (req.method === 'GET' && path === '/callback') {
-      const order = orders.get(url.searchParams.get('reference'));
+      const order = await findOrder(url.searchParams.get('reference'));
       if (!order) return fail(res, 404, 'Payment link not found.');
       // Browser returns cannot verify that a UPI payment settled.
       return redirect(res, '/pay/' + order.id);
     }
 
     if (req.method === 'GET' && path.startsWith('/pay/')) {
-      const order = orders.get(path.slice(5));
+      const order = await findOrder(path.slice(5));
       if (!order) return fail(res, 404, 'Payment link not found.');
       const { id, amount, utr } = order;
       const details = `<p>${escape(order.name)} &middot; ${money(amount)}</p><p>Reference: ${id}</p>`;
       if (utr) return page(res, 'Payment confirmed', details);
-      const qr = await generateUPIQR({
-        vpa: order.vpa, name: order.name, amount: amount / 100,
-        orderId: id.replaceAll('-', ''), mode: 'open',
-      });
-      return page(res, 'Pay with UPI', details + `<p><img src="${qr.qrImage}" width="280" height="280"
-alt="Scan this QR code with your UPI app"></p><p><a href="${escape(qr.upiUri)}">Open UPI app</a></p>
-<p>You can also enter UPI ID <code>${escape(order.vpa)}</code> and amount ${money(amount)} directly in your UPI app.</p>
+      return page(res, 'Pay with UPI', details + `<p>Open your UPI app and choose to pay by UPI ID.
+Enter UPI ID <code>${escape(order.vpa)}</code> and send exactly ${money(amount)}.
+Check the recipient name shown by your UPI app before paying.</p>
 <p>Pending merchant confirmation. If you already paid, check your UPI app before retrying.</p><p><a href="/callback?reference=${id}">Check payment status</a></p>`);
     }
 
@@ -99,7 +113,10 @@ alt="Scan this QR code with your UPI app"></p><p><a href="${escape(qr.upiUri)}">
 
     if (req.method === 'GET' && path === '/') {
       let total = 0;
-      const rows = [...orders.values()].reverse().map(({ id, amount, utr }) => {
+      const entries = db
+        ? (await db.query('SELECT id, amount, utr FROM opay_checkout_orders ORDER BY created_at DESC, id DESC')).rows
+        : [...orders.values()].reverse();
+      const rows = entries.map(({ id, amount, utr }) => {
         if (utr) total += amount;
         return `<li><a href="/pay/${id}">${money(amount)} &middot; ${id}</a> &middot;
 ${utr ? 'Confirmed &middot; ' + escape(utr) : `Pending
@@ -134,21 +151,36 @@ ${rows.length ? '<ul>' + rows.join('') + '</ul>' : '<p>No orders yet.</p>'}`);
       const amount = Number(rupees) * 100 + Number(fraction.padEnd(2, '0'));
       if (amount < 1 || amount > 100000000) return fail(res, 400, 'Amount must be between INR 0.01 and INR 1,000,000.');
       const id = randomUUID();
-      save({ id, amount, vpa, name });
+      if (db) {
+        await db.query('INSERT INTO opay_checkout_orders (id, amount, vpa, name) VALUES ($1, $2, $3, $4)', [id, amount, vpa, name]);
+      } else {
+        save({ id, amount, vpa, name });
+      }
       return redirect(res, '/pay/' + id);
     }
 
-    const order = orders.get(form.get('id'));
+    const order = await findOrder(form.get('id'));
     if (!order) return fail(res, 404, 'Payment link not found.');
     const utr = (form.get('utr') ?? '').trim().toUpperCase();
     if (!/^[A-Z0-9]{6,32}$/.test(utr)) return fail(res, 400, 'Enter a valid UPI transaction reference.');
     if (order.utr === utr) return redirect(res, '/');
+    if (db) {
+      const result = await db.query(
+        'UPDATE opay_checkout_orders SET utr = $1 WHERE id = $2 AND (utr IS NULL OR utr = $1)',
+        [utr, order.id],
+      );
+      if (result.rowCount) return redirect(res, '/');
+      return fail(res, 409, 'The order or payment reference is already confirmed.');
+    }
     if (order.utr || [...orders.values()].some((entry) => entry.utr === utr)) {
       return fail(res, 409, 'The order or payment reference is already confirmed.');
     }
     save({ ...order, utr });
     return redirect(res, '/');
   } catch (error) {
+    if (error.code === '23505' && error.constraint === 'opay_checkout_orders_utr_key') {
+      return fail(res, 409, 'The order or payment reference is already confirmed.');
+    }
     console.error(error);
     fail(res, 500, 'UpiPay could not complete the request.');
   }
