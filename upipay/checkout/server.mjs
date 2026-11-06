@@ -1,4 +1,4 @@
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { generateUPIQR } from 'upipay/qr';
@@ -13,18 +13,95 @@ const digest = (value) => createHash('sha256').update(value).digest();
 const admin = digest((process.env.OPAY_ADMIN_USER || 'admin') + ':' + password);
 const csrf = randomUUID();
 const orders = new Map();
+let database = null;
+if (process.env.DATABASE_URL) {
+  const { default: pg } = await import('pg');
+  database = new pg.Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.OPAY_DB_SSL === 'disable' ? false : { rejectUnauthorized: true }, max: 5 });
+  await database.query('CREATE TABLE IF NOT EXISTS opay_orders (id UUID PRIMARY KEY, data JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())');
+}
+const webhookUrl = process.env.OPAY_WEBHOOK_URL || '';
+const webhookSecret = process.env.OPAY_WEBHOOK_SECRET || '';
+if (webhookUrl && (!webhookUrl.startsWith('https://') || webhookSecret.length < 32)) throw new Error('Secure webhook URL and secret required.');
+const checkoutMinutes = Math.max(1, Math.min(60, Number(process.env.OPAY_CHECKOUT_MINUTES || 10)));
 
-try {
-  for (const order of JSON.parse(readFileSync(dataFile, 'utf8'))) orders.set(order.id, order);
-} catch (error) {
-  if (error.code !== 'ENOENT') throw error;
+
+if (database) {
+  const result = await database.query('SELECT data FROM opay_orders');
+  for (const row of result.rows) orders.set(row.data.id, row.data);
+} else {
+  try {
+    for (const order of JSON.parse(readFileSync(dataFile, 'utf8'))) orders.set(order.id, order);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
 }
 
-function save(order) {
+const outboxFile = dataFile + '.outbox';
+let outbox = [];
+if (database) {
+  await database.query('CREATE TABLE IF NOT EXISTS opay_webhook_outbox (id UUID PRIMARY KEY, data JSONB NOT NULL, next_at TIMESTAMPTZ NOT NULL, claimed_at TIMESTAMPTZ)');
+} else {
+  try { outbox = JSON.parse(readFileSync(outboxFile, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
+function persistOutbox() {
+  if (database) return;
+  writeFileSync(outboxFile + '.tmp', JSON.stringify(outbox), { mode: 0o600 });
+  renameSync(outboxFile + '.tmp', outboxFile);
+}
+async function queueEvent(order, event) {
+  if (!webhookUrl) return;
+  const item = { id: randomUUID(), event, orderId: order.id, amountPaise: order.amount, occurredAt: new Date().toISOString(), attempts: 0, nextAt: Date.now() };
+  if (database) {
+    await database.query('INSERT INTO opay_webhook_outbox (id, data, next_at) VALUES ($1, $2::jsonb, to_timestamp($3 / 1000.0))', [item.id, JSON.stringify(item), item.nextAt]);
+  } else {
+    outbox.push(item);
+    persistOutbox();
+  }
+}
+async function deliverEvents() {
+  if (!webhookUrl) return;
+  const due = database
+    ? (await database.query("SELECT data FROM opay_webhook_outbox WHERE next_at <= now() AND (claimed_at IS NULL OR claimed_at < now() - interval '30 seconds') ORDER BY next_at LIMIT 10")).rows.map(row => row.data)
+    : outbox.filter(x => x.nextAt <= Date.now()).slice(0, 10);
+  for (const item of due) {
+    if (database) {
+      const claim = await database.query("UPDATE opay_webhook_outbox SET claimed_at = now() WHERE id = $1 AND (claimed_at IS NULL OR claimed_at < now() - interval '30 seconds') RETURNING id", [item.id]);
+      if (!claim.rowCount) continue;
+    }
+    const payload = JSON.stringify({ id: item.id, event: item.event, orderId: item.orderId, amountPaise: item.amountPaise, occurredAt: item.occurredAt });
+    const timestamp = String(Date.now());
+    const signature = createHmac('sha256', webhookSecret).update(timestamp + '.' + payload).digest('hex');
+    try {
+      const response = await fetch(webhookUrl, { method: 'POST', headers: { 'content-type': 'application/json', 'x-opay-timestamp': timestamp, 'x-opay-signature': signature, 'x-opay-event-id': item.id }, body: payload, signal: AbortSignal.timeout(5000) });
+      if (!response.ok) throw new Error('Webhook HTTP ' + response.status);
+      if (database) await database.query('DELETE FROM opay_webhook_outbox WHERE id = $1', [item.id]);
+      else outbox.splice(outbox.findIndex(x => x.id === item.id), 1);
+    } catch (error) {
+      item.attempts++;
+      item.nextAt = Date.now() + Math.min(3600000, 5000 * 2 ** Math.min(item.attempts, 10));
+      if (database) await database.query('UPDATE opay_webhook_outbox SET data = $2::jsonb, next_at = to_timestamp($3 / 1000.0), claimed_at = NULL WHERE id = $1', [item.id, JSON.stringify(item), item.nextAt]);
+      console.error('Webhook retry scheduled:', item.id, String(error));
+    }
+    persistOutbox();
+  }
+}
+let delivering = false;
+setInterval(async () => {
+  if (delivering) return;
+  delivering = true;
+  try { await deliverEvents(); } catch (error) { console.error('Webhook worker:', error); }
+  finally { delivering = false; }
+}, 5000).unref();
+
+async function save(order) {
   const next = new Map(orders);
   next.set(order.id, order);
-  writeFileSync(dataFile + '.tmp', JSON.stringify([...next.values()]), { mode: 0o600 });
-  renameSync(dataFile + '.tmp', dataFile);
+  if (database) {
+    await database.query('INSERT INTO opay_orders (id, data) VALUES ($1, $2::jsonb) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()', [order.id, JSON.stringify(order)]);
+  } else {
+    writeFileSync(dataFile + '.tmp', JSON.stringify([...next.values()]), { mode: 0o600 });
+    renameSync(dataFile + '.tmp', dataFile);
+  }
   orders.set(order.id, order);
 }
 
@@ -32,6 +109,12 @@ const escape = (value) => String(value).replace(/[&<>"']/g, (char) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
 })[char]);
 
+function checkoutStatus(order) {
+  if (order.utr) return 'PAID_VERIFIED';
+  if (order.expiresAt && Date.now() >= Date.parse(order.expiresAt)) return 'EXPIRED_UNVERIFIED';
+  if (order.returnedAt) return 'RETURNED_UNVERIFIED';
+  return order.launchedAt ? 'PENDING' : 'CREATED';
+}
 const money = (paise) => 'INR ' + (paise / 100).toFixed(2);
 const token = '<input type="hidden" name="csrf" value="' + csrf + '">';
 
@@ -66,10 +149,43 @@ const server = createServer(async (req, res) => {
 
     if (req.method === 'GET' && path === '/opay.html') return redirect(res, '/');
 
+    if (req.method === 'GET' && path.startsWith('/api/order-status/')) {
+      const order = orders.get(path.slice('/api/order-status/'.length));
+      if (!order) return fail(res, 404, 'Order not found.');
+      const expiresAt = order.expiresAt || null;
+      const status = checkoutStatus(order);
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      return res.end(JSON.stringify({ orderId: order.id, amountPaise: order.amount, status, expiresAt }));
+    }
+
+    if (req.method === 'GET' && path.startsWith('/launch/')) {
+      const order = orders.get(path.slice('/launch/'.length));
+      if (!order) return fail(res, 404, 'Order not found.');
+      if (order.utr) return redirect(res, '/pay/' + order.id);
+      if (order.expiresAt && Date.now() >= Date.parse(order.expiresAt)) return redirect(res, '/pay/' + order.id);
+      const qr = await generateUPIQR({ vpa: order.vpa, name: order.name, amount: order.amount / 100, orderId: order.id.replaceAll('-', ''), mode: 'open' });
+      if (!order.launchedAt) {
+        const updated = { ...order, launchedAt: new Date().toISOString() };
+        await save(updated);
+        await queueEvent(updated, 'PAYMENT_INITIATED');
+      }
+      // A supported Android package may be selected by the customer. Fall back to generic UPI.
+      const selected = url.searchParams.get('app');
+      const packages = { gpay: 'com.google.android.apps.nbu.paisa.user', phonepe: 'com.phonepe.app', paytm: 'net.one97.paytm' };
+      const target = Object.hasOwn(packages, selected) ? 'intent://pay?' + qr.upiUri.split('?')[1] + '#Intent;scheme=upi;package=' + packages[selected] + ';end' : qr.upiUri;
+      res.writeHead(302, { Location: target }).end();
+      return;
+    }
+
     if (req.method === 'GET' && path === '/callback') {
       const order = orders.get(url.searchParams.get('reference'));
       if (!order) return fail(res, 404, 'Payment link not found.');
-      // Browser returns cannot verify that a UPI payment settled.
+      // App/browser return is an unverified observation, never payment proof.
+      if (!order.utr && !order.returnedAt && order.launchedAt) {
+        const updated = { ...order, returnedAt: new Date().toISOString() };
+        await save(updated);
+        await queueEvent(updated, 'CHECKOUT_RETURN_OBSERVED');
+      }
       return redirect(res, '/pay/' + order.id);
     }
 
@@ -79,14 +195,16 @@ const server = createServer(async (req, res) => {
       const { id, amount, utr } = order;
       const details = `<p>${escape(order.name)} &middot; ${money(amount)}</p><p>Reference: ${id}</p>`;
       if (utr) return page(res, 'Payment confirmed', details);
+      const expired = order.expiresAt && Date.now() >= Date.parse(order.expiresAt);
+      const state = checkoutStatus(order);
       const qr = await generateUPIQR({
         vpa: order.vpa, name: order.name, amount: amount / 100,
         orderId: id.replaceAll('-', ''), mode: 'open',
       });
       return page(res, 'Pay with UPI', details + `<p><img src="${qr.qrImage}" width="280" height="280"
-alt="Scan this QR code with your UPI app"></p><p><a href="${escape(qr.upiUri)}">Open UPI app</a></p>
-<p>You can also enter UPI ID <code>${escape(order.vpa)}</code> and amount ${money(amount)} directly in your UPI app.</p>
-<p>Pending merchant confirmation. If you already paid, check your UPI app before retrying.</p><p><a href="/callback?reference=${id}">Check payment status</a></p>`);
+alt="Scan this QR code with your UPI app"></p><p>${expired ? "Checkout expired; do not retry this order." : `<a href="/launch/${id}">Any UPI app</a> · <a href="/launch/${id}?app=gpay">Google Pay</a> · <a href="/launch/${id}?app=phonepe">PhonePe</a> · <a href="/launch/${id}?app=paytm">Paytm</a>`}</p>
+<p>Choose any installed UPI app when prompted. Google Pay, PhonePe and Paytm availability depends on the device.</p><p>You can also enter UPI ID <code>${escape(order.vpa)}</code> and amount ${money(amount)} directly in your UPI app.</p>
+<p>Order status: <strong>${state}</strong>. Returning from a UPI app never confirms receipt.</p><p>Expires: ${escape(order.expiresAt || "Not set")}</p><p><a href="/callback?reference=${id}">Return to OPAY (unverified)</a></p><p><a href="/api/order-status/${id}">Read order status JSON</a></p>`);
     }
 
     if (path !== '/' && path !== '/orders' && path !== '/confirm') return fail(res, 404, 'Not found.');
@@ -134,7 +252,7 @@ ${rows.length ? '<ul>' + rows.join('') + '</ul>' : '<p>No orders yet.</p>'}`);
       const amount = Number(rupees) * 100 + Number(fraction.padEnd(2, '0'));
       if (amount < 1 || amount > 100000000) return fail(res, 400, 'Amount must be between INR 0.01 and INR 1,000,000.');
       const id = randomUUID();
-      save({ id, amount, vpa, name });
+      await save({ id, amount, vpa, name, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + checkoutMinutes * 60000).toISOString() });
       return redirect(res, '/pay/' + id);
     }
 
@@ -146,7 +264,7 @@ ${rows.length ? '<ul>' + rows.join('') + '</ul>' : '<p>No orders yet.</p>'}`);
     if (order.utr || [...orders.values()].some((entry) => entry.utr === utr)) {
       return fail(res, 409, 'The order or payment reference is already confirmed.');
     }
-    save({ ...order, utr });
+    await save({ ...order, utr });
     return redirect(res, '/');
   } catch (error) {
     console.error(error);
