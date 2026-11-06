@@ -33,7 +33,7 @@ jobs:
             git commit -m "chore: synchronize upipay lockfile"
             git push
           fi
-      - run: npm ci --include=dev
+      - run: npm install --include=dev
       - run: npm run typecheck
       - run: npm run build
       - run: node --test test/checkout.integration.test.mjs
