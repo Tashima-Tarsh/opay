@@ -69,6 +69,12 @@ const escape = (value) => String(value).replace(/[&<>"']/g, (char) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
 })[char]);
 
+function checkoutStatus(order) {
+  if (order.utr) return 'PAID_VERIFIED';
+  if (order.expiresAt && Date.now() >= Date.parse(order.expiresAt)) return 'EXPIRED_UNVERIFIED';
+  if (order.returnedAt) return 'RETURNED_UNVERIFIED';
+  return order.launchedAt ? 'PENDING' : 'CREATED';
+}
 const money = (paise) => 'INR ' + (paise / 100).toFixed(2);
 const token = '<input type="hidden" name="csrf" value="' + csrf + '">';
 
@@ -107,7 +113,7 @@ const server = createServer(async (req, res) => {
       const order = orders.get(path.slice('/api/order-status/'.length));
       if (!order) return fail(res, 404, 'Order not found.');
       const expiresAt = order.expiresAt || null;
-      const status = order.utr ? 'PAID_VERIFIED' : (expiresAt && Date.now() >= Date.parse(expiresAt) ? 'EXPIRED_UNVERIFIED' : (order.returnedAt ? 'RETURNED_UNVERIFIED' : (order.launchedAt ? 'PENDING' : 'CREATED')));
+      const status = checkoutStatus(order);
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
       return res.end(JSON.stringify({ orderId: order.id, amountPaise: order.amount, status, expiresAt }));
     }
@@ -123,8 +129,11 @@ const server = createServer(async (req, res) => {
         save(updated);
         queueEvent(updated, 'PAYMENT_INITIATED');
       }
-      // This redirect initiates UPI; it does not prove the payment succeeded.
-      res.writeHead(302, { Location: qr.upiUri }).end();
+      // A supported Android package may be selected by the customer. Fall back to generic UPI.
+      const selected = url.searchParams.get('app');
+      const packages = { gpay: 'com.google.android.apps.nbu.paisa.user', phonepe: 'com.phonepe.app', paytm: 'net.one97.paytm' };
+      const target = Object.hasOwn(packages, selected) ? 'intent://pay?' + qr.upiUri.split('?')[1] + '#Intent;scheme=upi;package=' + packages[selected] + ';S.browser_fallback_url=' + encodeURIComponent('/pay/' + order.id) + ';end' : qr.upiUri;
+      res.writeHead(302, { Location: target }).end();
       return;
     }
 
@@ -147,15 +156,15 @@ const server = createServer(async (req, res) => {
       const details = `<p>${escape(order.name)} &middot; ${money(amount)}</p><p>Reference: ${id}</p>`;
       if (utr) return page(res, 'Payment confirmed', details);
       const expired = order.expiresAt && Date.now() >= Date.parse(order.expiresAt);
-      const state = expired ? 'EXPIRED_UNVERIFIED' : (order.returnedAt ? 'RETURNED_UNVERIFIED' : (order.launchedAt ? 'PENDING' : 'CREATED'));
+      const state = checkoutStatus(order);
       const qr = await generateUPIQR({
         vpa: order.vpa, name: order.name, amount: amount / 100,
         orderId: id.replaceAll('-', ''), mode: 'open',
       });
       return page(res, 'Pay with UPI', details + `<p><img src="${qr.qrImage}" width="280" height="280"
-alt="Scan this QR code with your UPI app"></p><p>${expired ? "Checkout expired; do not retry this order." : `<a href="/launch/${id}">Pay using UPI app</a>`}</p>
+alt="Scan this QR code with your UPI app"></p><p>${expired ? "Checkout expired; do not retry this order." : `<a href="/launch/${id}">Any UPI app</a> · <a href="/launch/${id}?app=gpay">Google Pay</a> · <a href="/launch/${id}?app=phonepe">PhonePe</a> · <a href="/launch/${id}?app=paytm">Paytm</a>`}</p>
 <p>Choose any installed UPI app when prompted. Google Pay, PhonePe and Paytm availability depends on the device.</p><p>You can also enter UPI ID <code>${escape(order.vpa)}</code> and amount ${money(amount)} directly in your UPI app.</p>
-<p>Order status: <strong>${state}</strong>. Returning from a UPI app never confirms receipt.</p><p>Expires: ${escape(order.expiresAt || "Not set")}</p><p><a href="/callback?reference=${id}">I returned from my UPI app (check status)</a></p><p><a href="/api/order-status/${id}">Read order status JSON</a></p>`);
+<p>Order status: <strong>${state}</strong>. Returning from a UPI app never confirms receipt.</p><p>Expires: ${escape(order.expiresAt || "Not set")}</p><p><a href="/callback?reference=${id}">Return to OPAY (unverified)</a></p><p><a href="/api/order-status/${id}">Read order status JSON</a></p>`);
     }
 
     if (path !== '/' && path !== '/orders' && path !== '/confirm') return fail(res, 404, 'Not found.');
