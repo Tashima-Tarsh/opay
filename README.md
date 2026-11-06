@@ -11,5 +11,12 @@ The existing Render service uses `npm ci --omit=dev` to install and build
 UpiPay and `npm start` to launch it. It reuses `MERCHANT_UPI_ID`,
 `OPAY_ADMIN_USER` and `OPAY_ADMIN_PASSWORD` from its environment.
 If `OPAY_ADMIN_USER` is unset, the username defaults to `admin`.
-On Render's free service, the local order file can be lost on a restart or
-redeploy.
+Set `UPIPAY_DATABASE_URL` to a PostgreSQL connection URL to store orders
+and payment references across restarts and redeploys. The database role
+needs permission to create and write the `opay_checkout_orders` table.
+Use a database that will remain available for as long as you need the
+orders. PostgreSQL mode starts with the orders already in that database.
+Back up and migrate any existing local orders before switching.
+
+Without a database URL, checkout uses the local JSON file for development.
+On Render Free, that file can be lost when the service stops or redeploys.

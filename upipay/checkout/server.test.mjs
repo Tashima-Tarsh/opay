@@ -27,6 +27,7 @@ test('merchant creates, shares, and confirms a UPI order', { timeout: 15000 }, a
         ...process.env, HOST: '127.0.0.1', PORT: '0', MERCHANT_UPI_ID: 'test@ybl',
         MERCHANT_NAME: 'Test & Co', OPAY_ADMIN_USER: '', UPIPAY_ADMIN_PASSWORD: 'test-password',
         UPIPAY_DATA_FILE: join(dir, 'orders.json'),
+        UPIPAY_DATABASE_URL: process.env.OPAY_TEST_DATABASE_URL ?? '',
       },
       stdio: ['ignore', 'pipe', 'inherit'],
     });
