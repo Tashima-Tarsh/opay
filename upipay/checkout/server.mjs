@@ -132,7 +132,7 @@ const server = createServer(async (req, res) => {
       // A supported Android package may be selected by the customer. Fall back to generic UPI.
       const selected = url.searchParams.get('app');
       const packages = { gpay: 'com.google.android.apps.nbu.paisa.user', phonepe: 'com.phonepe.app', paytm: 'net.one97.paytm' };
-      const target = Object.hasOwn(packages, selected) ? 'intent://pay?' + qr.upiUri.split('?')[1] + '#Intent;scheme=upi;package=' + packages[selected] + ';S.browser_fallback_url=' + encodeURIComponent('/pay/' + order.id) + ';end' : qr.upiUri;
+      const target = Object.hasOwn(packages, selected) ? 'intent://pay?' + qr.upiUri.split('?')[1] + '#Intent;scheme=upi;package=' + packages[selected] + ';end' : qr.upiUri;
       res.writeHead(302, { Location: target }).end();
       return;
     }
