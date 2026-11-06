@@ -1,14 +1,14 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { generateUPIQR } from 'upipay/qr';
 import pg from 'pg';
+import { validateQRRequest } from 'upipay/utils';
 
 const { MERCHANT_UPI_ID: vpa, MERCHANT_NAME: name = 'Merchant', UPIPAY_ADMIN_PASSWORD: password = process.env.OPAY_ADMIN_PASSWORD,
   UPIPAY_DATA_FILE: dataFile = 'upipay-orders.json', HOST = process.env.RENDER === 'true' ? '0.0.0.0' : '127.0.0.1', PORT = '8080' } = process.env;
 
 if (!vpa || !password) throw new Error('Set MERCHANT_UPI_ID and UPIPAY_ADMIN_PASSWORD before starting.');
-await generateUPIQR({ vpa, name, amount: 1, orderId: 'startup-check' });
+validateQRRequest({ vpa, name, amount: 1, orderId: 'startup-check' });
 
 const digest = (value) => createHash('sha256').update(value).digest();
 const admin = digest((process.env.OPAY_ADMIN_USER || 'admin') + ':' + password);
@@ -97,13 +97,9 @@ const server = createServer(async (req, res) => {
       const { id, amount, utr } = order;
       const details = `<p>${escape(order.name)} &middot; ${money(amount)}</p><p>Reference: ${id}</p>`;
       if (utr) return page(res, 'Payment confirmed', details);
-      const qr = await generateUPIQR({
-        vpa: order.vpa, name: order.name, amount: amount / 100,
-        orderId: id.replaceAll('-', ''), mode: 'open',
-      });
-      return page(res, 'Pay with UPI', details + `<p><img src="${qr.qrImage}" width="280" height="280"
-alt="Scan this QR code with your UPI app"></p><p><a href="${escape(qr.upiUri)}">Open UPI app</a></p>
-<p>You can also enter UPI ID <code>${escape(order.vpa)}</code> and amount ${money(amount)} directly in your UPI app.</p>
+      return page(res, 'Pay with UPI', details + `<p>Open your UPI app and choose to pay by UPI ID.
+Enter UPI ID <code>${escape(order.vpa)}</code> and send exactly ${money(amount)}.
+Check the recipient name shown by your UPI app before paying.</p>
 <p>Pending merchant confirmation. If you already paid, check your UPI app before retrying.</p><p><a href="/callback?reference=${id}">Check payment status</a></p>`);
     }
 

@@ -1,7 +1,8 @@
 # OPay powered by UpiPay
 
-The merchant creates a payment link from the home page. Customers can scan the
-QR code or open their UPI app. The checkout status link calls
+The merchant creates a checkout link from the home page. This development
+checkout uses personal UPI transfers. Customers enter the displayed UPI ID
+and exact amount in their UPI app. The checkout status link calls
 `/callback?reference=<order-id>` and displays the order's current state.
 The browser return does not confirm a payment. Confirm it in the merchant
 ledger after checking the bank record and UPI transaction reference.
