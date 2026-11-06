@@ -38,35 +38,60 @@ if (database) {
 
 const outboxFile = dataFile + '.outbox';
 let outbox = [];
-try { outbox = JSON.parse(readFileSync(outboxFile, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+if (database) {
+  await database.query('CREATE TABLE IF NOT EXISTS opay_webhook_outbox (id UUID PRIMARY KEY, data JSONB NOT NULL, next_at TIMESTAMPTZ NOT NULL, claimed_at TIMESTAMPTZ)');
+} else {
+  try { outbox = JSON.parse(readFileSync(outboxFile, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
 function persistOutbox() {
+  if (database) return;
   writeFileSync(outboxFile + '.tmp', JSON.stringify(outbox), { mode: 0o600 });
   renameSync(outboxFile + '.tmp', outboxFile);
 }
-function queueEvent(order, event) {
+async function queueEvent(order, event) {
   if (!webhookUrl) return;
-  outbox.push({ id: randomUUID(), event, orderId: order.id, amountPaise: order.amount, occurredAt: new Date().toISOString(), attempts: 0, nextAt: Date.now() });
-  persistOutbox();
+  const item = { id: randomUUID(), event, orderId: order.id, amountPaise: order.amount, occurredAt: new Date().toISOString(), attempts: 0, nextAt: Date.now() };
+  if (database) {
+    await database.query('INSERT INTO opay_webhook_outbox (id, data, next_at) VALUES ($1, $2::jsonb, to_timestamp($3 / 1000.0))', [item.id, JSON.stringify(item), item.nextAt]);
+  } else {
+    outbox.push(item);
+    persistOutbox();
+  }
 }
 async function deliverEvents() {
   if (!webhookUrl) return;
-  for (const item of outbox.filter(x => x.nextAt <= Date.now()).slice(0, 10)) {
+  const due = database
+    ? (await database.query("SELECT data FROM opay_webhook_outbox WHERE next_at <= now() AND (claimed_at IS NULL OR claimed_at < now() - interval '30 seconds') ORDER BY next_at LIMIT 10")).rows.map(row => row.data)
+    : outbox.filter(x => x.nextAt <= Date.now()).slice(0, 10);
+  for (const item of due) {
+    if (database) {
+      const claim = await database.query("UPDATE opay_webhook_outbox SET claimed_at = now() WHERE id = $1 AND (claimed_at IS NULL OR claimed_at < now() - interval '30 seconds') RETURNING id", [item.id]);
+      if (!claim.rowCount) continue;
+    }
     const payload = JSON.stringify({ id: item.id, event: item.event, orderId: item.orderId, amountPaise: item.amountPaise, occurredAt: item.occurredAt });
     const timestamp = String(Date.now());
     const signature = createHmac('sha256', webhookSecret).update(timestamp + '.' + payload).digest('hex');
     try {
       const response = await fetch(webhookUrl, { method: 'POST', headers: { 'content-type': 'application/json', 'x-opay-timestamp': timestamp, 'x-opay-signature': signature, 'x-opay-event-id': item.id }, body: payload, signal: AbortSignal.timeout(5000) });
       if (!response.ok) throw new Error('Webhook HTTP ' + response.status);
-      outbox.splice(outbox.indexOf(item), 1);
+      if (database) await database.query('DELETE FROM opay_webhook_outbox WHERE id = $1', [item.id]);
+      else outbox.splice(outbox.findIndex(x => x.id === item.id), 1);
     } catch (error) {
       item.attempts++;
       item.nextAt = Date.now() + Math.min(3600000, 5000 * 2 ** Math.min(item.attempts, 10));
+      if (database) await database.query('UPDATE opay_webhook_outbox SET data = $2::jsonb, next_at = to_timestamp($3 / 1000.0), claimed_at = NULL WHERE id = $1', [item.id, JSON.stringify(item), item.nextAt]);
       console.error('Webhook retry scheduled:', item.id, String(error));
     }
     persistOutbox();
   }
 }
-setInterval(() => { void deliverEvents(); }, 5000).unref();
+let delivering = false;
+setInterval(async () => {
+  if (delivering) return;
+  delivering = true;
+  try { await deliverEvents(); } catch (error) { console.error('Webhook worker:', error); }
+  finally { delivering = false; }
+}, 5000).unref();
 
 async function save(order) {
   const next = new Map(orders);
@@ -142,7 +167,7 @@ const server = createServer(async (req, res) => {
       if (!order.launchedAt) {
         const updated = { ...order, launchedAt: new Date().toISOString() };
         await save(updated);
-        queueEvent(updated, 'PAYMENT_INITIATED');
+        await queueEvent(updated, 'PAYMENT_INITIATED');
       }
       // A supported Android package may be selected by the customer. Fall back to generic UPI.
       const selected = url.searchParams.get('app');
@@ -159,7 +184,7 @@ const server = createServer(async (req, res) => {
       if (!order.utr && !order.returnedAt && order.launchedAt) {
         const updated = { ...order, returnedAt: new Date().toISOString() };
         await save(updated);
-        queueEvent(updated, 'CHECKOUT_RETURN_OBSERVED');
+        await queueEvent(updated, 'CHECKOUT_RETURN_OBSERVED');
       }
       return redirect(res, '/pay/' + order.id);
     }
