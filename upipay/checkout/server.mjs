@@ -13,6 +13,8 @@ const digest = (value) => createHash('sha256').update(value).digest();
 const admin = digest((process.env.OPAY_ADMIN_USER || 'admin') + ':' + password);
 const csrf = randomUUID();
 const orders = new Map();
+const checkoutMinutes = Math.max(1, Math.min(60, Number(process.env.OPAY_CHECKOUT_MINUTES || 10)));
+
 
 try {
   for (const order of JSON.parse(readFileSync(dataFile, 'utf8'))) orders.set(order.id, order);
@@ -66,10 +68,32 @@ const server = createServer(async (req, res) => {
 
     if (req.method === 'GET' && path === '/opay.html') return redirect(res, '/');
 
+    if (req.method === 'GET' && path.startsWith('/api/order-status/')) {
+      const order = orders.get(path.slice('/api/order-status/'.length));
+      if (!order) return fail(res, 404, 'Order not found.');
+      const expiresAt = order.expiresAt || null;
+      const status = order.utr ? 'PAID_VERIFIED' : (expiresAt && Date.now() >= Date.parse(expiresAt) ? 'EXPIRED_UNVERIFIED' : (order.returnedAt ? 'RETURNED_UNVERIFIED' : (order.launchedAt ? 'PENDING' : 'CREATED')));
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      return res.end(JSON.stringify({ orderId: order.id, amountPaise: order.amount, status, expiresAt }));
+    }
+
+    if (req.method === 'GET' && path.startsWith('/launch/')) {
+      const order = orders.get(path.slice('/launch/'.length));
+      if (!order) return fail(res, 404, 'Order not found.');
+      if (order.utr) return redirect(res, '/pay/' + order.id);
+      if (order.expiresAt && Date.now() >= Date.parse(order.expiresAt)) return redirect(res, '/pay/' + order.id);
+      const qr = await generateUPIQR({ vpa: order.vpa, name: order.name, amount: order.amount / 100, orderId: order.id.replaceAll('-', ''), mode: 'open' });
+      save({ ...order, launchedAt: new Date().toISOString() });
+      // This redirect initiates UPI; it does not prove the payment succeeded.
+      res.writeHead(302, { Location: qr.upiUri }).end();
+      return;
+    }
+
     if (req.method === 'GET' && path === '/callback') {
       const order = orders.get(url.searchParams.get('reference'));
       if (!order) return fail(res, 404, 'Payment link not found.');
-      // Browser returns cannot verify that a UPI payment settled.
+      // App/browser return is an unverified observation, never payment proof.
+      if (!order.utr && !order.returnedAt) save({ ...order, returnedAt: new Date().toISOString() });
       return redirect(res, '/pay/' + order.id);
     }
 
@@ -79,14 +103,16 @@ const server = createServer(async (req, res) => {
       const { id, amount, utr } = order;
       const details = `<p>${escape(order.name)} &middot; ${money(amount)}</p><p>Reference: ${id}</p>`;
       if (utr) return page(res, 'Payment confirmed', details);
+      const expired = order.expiresAt && Date.now() >= Date.parse(order.expiresAt);
+      const state = expired ? 'EXPIRED_UNVERIFIED' : (order.returnedAt ? 'RETURNED_UNVERIFIED' : (order.launchedAt ? 'PENDING' : 'CREATED'));
       const qr = await generateUPIQR({
         vpa: order.vpa, name: order.name, amount: amount / 100,
         orderId: id.replaceAll('-', ''), mode: 'open',
       });
       return page(res, 'Pay with UPI', details + `<p><img src="${qr.qrImage}" width="280" height="280"
-alt="Scan this QR code with your UPI app"></p><p><a href="${escape(qr.upiUri)}">Open UPI app</a></p>
+alt="Scan this QR code with your UPI app"></p><p>${expired ? "Checkout expired; do not retry this order." : `<a href="/launch/${id}">Pay using UPI app</a>`}</p>
 <p>You can also enter UPI ID <code>${escape(order.vpa)}</code> and amount ${money(amount)} directly in your UPI app.</p>
-<p>Pending merchant confirmation. If you already paid, check your UPI app before retrying.</p><p><a href="/callback?reference=${id}">Check payment status</a></p>`);
+<p>Order status: <strong>${state}</strong>. Returning from a UPI app never confirms receipt.</p><p>Expires: ${escape(order.expiresAt || "Not set")}</p><p><a href="/callback?reference=${id}">I returned from my UPI app (check status)</a></p><p><a href="/api/order-status/${id}">Read order status JSON</a></p>`);
     }
 
     if (path !== '/' && path !== '/orders' && path !== '/confirm') return fail(res, 404, 'Not found.');
@@ -134,7 +160,7 @@ ${rows.length ? '<ul>' + rows.join('') + '</ul>' : '<p>No orders yet.</p>'}`);
       const amount = Number(rupees) * 100 + Number(fraction.padEnd(2, '0'));
       if (amount < 1 || amount > 100000000) return fail(res, 400, 'Amount must be between INR 0.01 and INR 1,000,000.');
       const id = randomUUID();
-      save({ id, amount, vpa, name });
+      save({ id, amount, vpa, name, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + checkoutMinutes * 60000).toISOString() });
       return redirect(res, '/pay/' + id);
     }
 
