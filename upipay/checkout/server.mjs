@@ -13,16 +13,27 @@ const digest = (value) => createHash('sha256').update(value).digest();
 const admin = digest((process.env.OPAY_ADMIN_USER || 'admin') + ':' + password);
 const csrf = randomUUID();
 const orders = new Map();
+let database = null;
+if (process.env.DATABASE_URL) {
+  const { default: pg } = await import('pg');
+  database = new pg.Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.OPAY_DB_SSL === 'disable' ? false : { rejectUnauthorized: true }, max: 5 });
+  await database.query('CREATE TABLE IF NOT EXISTS opay_orders (id UUID PRIMARY KEY, data JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())');
+}
 const webhookUrl = process.env.OPAY_WEBHOOK_URL || '';
 const webhookSecret = process.env.OPAY_WEBHOOK_SECRET || '';
 if (webhookUrl && (!webhookUrl.startsWith('https://') || webhookSecret.length < 32)) throw new Error('Secure webhook URL and secret required.');
 const checkoutMinutes = Math.max(1, Math.min(60, Number(process.env.OPAY_CHECKOUT_MINUTES || 10)));
 
 
-try {
-  for (const order of JSON.parse(readFileSync(dataFile, 'utf8'))) orders.set(order.id, order);
-} catch (error) {
-  if (error.code !== 'ENOENT') throw error;
+if (database) {
+  const result = await database.query('SELECT data FROM opay_orders');
+  for (const row of result.rows) orders.set(row.data.id, row.data);
+} else {
+  try {
+    for (const order of JSON.parse(readFileSync(dataFile, 'utf8'))) orders.set(order.id, order);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
 }
 
 const outboxFile = dataFile + '.outbox';
@@ -57,11 +68,15 @@ async function deliverEvents() {
 }
 setInterval(() => { void deliverEvents(); }, 5000).unref();
 
-function save(order) {
+async function save(order) {
   const next = new Map(orders);
   next.set(order.id, order);
-  writeFileSync(dataFile + '.tmp', JSON.stringify([...next.values()]), { mode: 0o600 });
-  renameSync(dataFile + '.tmp', dataFile);
+  if (database) {
+    await database.query('INSERT INTO opay_orders (id, data) VALUES ($1, $2::jsonb) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()', [order.id, JSON.stringify(order)]);
+  } else {
+    writeFileSync(dataFile + '.tmp', JSON.stringify([...next.values()]), { mode: 0o600 });
+    renameSync(dataFile + '.tmp', dataFile);
+  }
   orders.set(order.id, order);
 }
 
@@ -126,7 +141,7 @@ const server = createServer(async (req, res) => {
       const qr = await generateUPIQR({ vpa: order.vpa, name: order.name, amount: order.amount / 100, orderId: order.id.replaceAll('-', ''), mode: 'open' });
       if (!order.launchedAt) {
         const updated = { ...order, launchedAt: new Date().toISOString() };
-        save(updated);
+        await save(updated);
         queueEvent(updated, 'PAYMENT_INITIATED');
       }
       // A supported Android package may be selected by the customer. Fall back to generic UPI.
@@ -143,7 +158,7 @@ const server = createServer(async (req, res) => {
       // App/browser return is an unverified observation, never payment proof.
       if (!order.utr && !order.returnedAt && order.launchedAt) {
         const updated = { ...order, returnedAt: new Date().toISOString() };
-        save(updated);
+        await save(updated);
         queueEvent(updated, 'CHECKOUT_RETURN_OBSERVED');
       }
       return redirect(res, '/pay/' + order.id);
@@ -212,7 +227,7 @@ ${rows.length ? '<ul>' + rows.join('') + '</ul>' : '<p>No orders yet.</p>'}`);
       const amount = Number(rupees) * 100 + Number(fraction.padEnd(2, '0'));
       if (amount < 1 || amount > 100000000) return fail(res, 400, 'Amount must be between INR 0.01 and INR 1,000,000.');
       const id = randomUUID();
-      save({ id, amount, vpa, name, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + checkoutMinutes * 60000).toISOString() });
+      await save({ id, amount, vpa, name, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + checkoutMinutes * 60000).toISOString() });
       return redirect(res, '/pay/' + id);
     }
 
@@ -224,7 +239,7 @@ ${rows.length ? '<ul>' + rows.join('') + '</ul>' : '<p>No orders yet.</p>'}`);
     if (order.utr || [...orders.values()].some((entry) => entry.utr === utr)) {
       return fail(res, 409, 'The order or payment reference is already confirmed.');
     }
-    save({ ...order, utr });
+    await save({ ...order, utr });
     return redirect(res, '/');
   } catch (error) {
     console.error(error);
